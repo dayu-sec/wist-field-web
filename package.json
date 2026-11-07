@@ -12,7 +12,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@dayu-sec/wist-atlas-graph": "https://github.com/dayu-sec/wist-atlas-graph/releases/download/v0.5.0/dayu-sec-wist-atlas-graph-0.5.0.tgz",
+    "@dayu-sec/wist-atlas-graph": "https://github.com/dayu-sec/wist-atlas-graph/releases/download/v0.5.1/dayu-sec-wist-atlas-graph-0.5.1.tgz",
     "react": "^19.2.5",
     "react-dom": "^19.2.5"
   },
