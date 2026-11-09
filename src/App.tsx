@@ -25,7 +25,7 @@ interface Route {
   query: URLSearchParams
 }
 
-/** hash 路由：`#/evidence?subject_id=agent-1`、`#/evidence/art_xxx`。刷新 / 分享都能回到同一页。 */
+/** hash 路由：`#/evidence?subject_id=agent-1`、`#/evidence/<cmd_id>`（也接受 `art_…`）。刷新 / 分享都能回到同一页。 */
 function parseHash(hash: string): Route {
   const raw = hash.replace(/^#\/?/, '')
   const [pathPart, queryPart = ''] = raw.split('?')
@@ -146,18 +146,20 @@ export default function App() {
 
       {route.tab === 'evidence' && route.segments[0] ? (
         <EvidenceDetailPage
-          artifactId={route.segments[0]}
+          evidenceId={route.segments[0]}
           onBack={() => navigate('/evidence')}
         />
       ) : null}
 
       {route.tab === 'evidence' && !route.segments[0] ? (
         <EvidencePage
+          commandId={route.query.get('cmd_id') ?? ''}
           subjectId={route.query.get('subject_id') ?? ''}
           kind={route.query.get('kind') ?? ''}
-          onOpen={(artifactId) => navigate(`/evidence/${artifactId}`)}
-          onQuery={({ subjectId, kind }) => {
+          onOpen={(evidenceId) => navigate(`/evidence/${evidenceId}`)}
+          onQuery={({ cmdId, subjectId, kind }) => {
             const params = new URLSearchParams()
+            if (cmdId) params.set('cmd_id', cmdId)
             if (subjectId) params.set('subject_id', subjectId)
             if (kind) params.set('kind', kind)
             const suffix = params.size > 0 ? `?${params.toString()}` : ''
@@ -194,6 +196,11 @@ export default function App() {
           syncing={syncing}
           lastSyncedAt={lastSyncedAt}
           onRefresh={() => void refresh()}
+          section={route.segments[0]}
+          onSection={(section) =>
+            // 探活结果是默认视图，留在 `#/health` 上；两张接口清单各有独立地址，可分享。
+            navigate(section === 'probes' ? '/health' : `/health/${section}`)
+          }
         />
       ) : null}
 

@@ -22,10 +22,10 @@
 | 页面 | 状态 | 数据源 |
 |---|---|---|
 | 概览 | 可用 | `GET /api/health`（各数据源就绪度 + 接口可用性摘要） |
-| 证据 | 可用 | `GET /api/evidence`、`GET /api/evidence/{id}`、`GET /api/evidence/capabilities`（选正文通路）、`POST /api/evidence/{id}:presign` |
+| 证据 | 可用 | `GET /api/evidence?cmd_id=`（主筛选位）、`GET /api/evidence/{cmd_id}`（`cmd_id` 或 `art_…`）、`GET /api/evidence/capabilities`（选正文通路）、`POST /api/evidence/{cmd_id}:presign`；列表显示命令 id |
 | 资产拓扑 | 可用 | `GET /api/atlas/*`（wist-atlas 只读 API，经 BFF 转；画布来自 `@dayu-sec/wist-atlas-graph`） |
 | 运行指标 | 占位 | 平台侧尚无聚合（现网的 VM 在各网关栈里） |
-| 接口可用性 | 可用 | `GET /api/health.interfaces[]`：逐条探活 + 本次会话可用率 |
+| 接口可用性 | 可用 | 三个 tab：探活结果（`GET /api/health.interfaces[]` + 本次会话可用率）/ 证据读取 API（`GET /api/evidence/openapi.json`）/ 资产拓扑 API（`GET /api/atlas/openapi.json`）。tab 走路由：`#/health`、`#/health/evidence`、`#/health/atlas` |
 | 安全设备 | 占位 | `containment_capabilities` 尚未上报 |
 
 **占位页不是"待美化"，是"没数据源"**：缺什么、按什么顺序接，页面上都写出来了。
@@ -40,13 +40,18 @@ GET  /api/health
 GET  /api/evidence?subject_id=&kind=&since=&limit=&cursor=
      → { artifacts: [EvidenceArtifact], next_cursor }
 
-GET  /api/evidence/{artifact_id}
+GET  /api/evidence/{cmd_id}
      → EvidenceArtifact
+       path 里的 id 优先是**调查命令 id**；列表行里的 `artifact_id` 也接受（服务端自己定位）。
 
 GET  /api/evidence/capabilities
      → { objects_kind: "file"|"s3"|null, presign_supported: bool }
 
-POST /api/evidence/{artifact_id}:presign
+GET  /api/evidence/openapi.json
+     → OpenAPI 3.1：浏览器能调的证据读接口（路径 / 参数 / 响应）
+       「接口可用性」页拿它渲染「证据读取 API」tab；页面不维护第二份清单。
+
+POST /api/evidence/{cmd_id}:presign
      → { artifact_id, url, expires_in_seconds, expires_at }
 ```
 

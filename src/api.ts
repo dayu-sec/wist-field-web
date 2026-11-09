@@ -205,6 +205,8 @@ export function getEvidenceCapabilities(): Promise<EvidenceCapabilities> {
 }
 
 export interface EvidenceQuery {
+  /** 调查命令 id：发起调查的人手里只有这个，也是页面上的主筛选位。 */
+  cmdId?: string
   subjectId?: string
   kind?: string
   since?: string
@@ -214,6 +216,7 @@ export interface EvidenceQuery {
 
 export function listEvidence(query: EvidenceQuery = {}): Promise<EvidenceListPage> {
   const params = new URLSearchParams()
+  if (query.cmdId) params.set('cmd_id', query.cmdId)
   if (query.subjectId) params.set('subject_id', query.subjectId)
   if (query.kind) params.set('kind', query.kind)
   if (query.since) params.set('since', query.since)
@@ -223,24 +226,31 @@ export function listEvidence(query: EvidenceQuery = {}): Promise<EvidenceListPag
   return request<EvidenceListPage>(`/api/evidence${suffix}`)
 }
 
-export function getEvidence(artifactId: string): Promise<EvidenceArtifact> {
-  return request<EvidenceArtifact>(`/api/evidence/${encodeURIComponent(artifactId)}`)
+/**
+ * 按 id 读一条证据的索引行。
+ *
+ * `id` 可以是**调查命令 id**（`cmd_id`，发起调查的人手里只有这个），
+ * 也可以是列表行里的 `artifact_id`（`art_…`）：证据服务先按后者、再按前者找，
+ * 两者指向同一行（定位规则不在前端）。
+ */
+export function getEvidence(id: string): Promise<EvidenceArtifact> {
+  return request<EvidenceArtifact>(`/api/evidence/${encodeURIComponent(id)}`)
 }
 
-/** 让 BFF 向证据服务要一个 60s、单对象的 URL。 */
-export function presignEvidence(artifactId: string): Promise<PresignResult> {
+/** 让 BFF 向证据服务要一个 60s、单对象的 URL（`id` 同上：cmd_id 或 artifact_id）。 */
+export function presignEvidence(id: string): Promise<PresignResult> {
   return request<PresignResult>(
-    `/api/evidence/${encodeURIComponent(artifactId)}:presign`,
+    `/api/evidence/${encodeURIComponent(id)}:presign`,
     { method: 'POST' },
   )
 }
 
 /**
  * 代理读正文：本地文件存储（`objects.kind = file`）没有预签名 URL，
- * 页面直接开这个地址，由 BFF 带身份去证据服务取原文。
+ * 页面直接开这个地址，由 BFF 带身份去证据服务取原文（`id` 同上）。
  */
-export function contentUrl(artifactId: string): string {
-  return `/api/evidence/${encodeURIComponent(artifactId)}/content`
+export function contentUrl(id: string): string {
+  return `/api/evidence/${encodeURIComponent(id)}/content`
 }
 
 export interface IntegrationInfo {
@@ -469,6 +479,17 @@ export interface OpenApiDocument {
 
 export function getAtlasOpenApi(): Promise<OpenApiDocument> {
   return request<OpenApiDocument>('/api/atlas/openapi.json')
+}
+
+/**
+ * 证据读取接口的清单（BFF 自己输出的 OpenAPI 3.1）。
+ *
+ * 与 atlas 那份同一个用法：页面不维护第二份清单。区别在归属 —— atlas 的 spec 由 atlas 出；
+ * 浏览器能调的证据读接口就是 BFF 的 `/api/evidence*`（证据服务的 `/internal/*` 浏览器到不了），
+ * 所以这份由 BFF 出。
+ */
+export function getEvidenceOpenApi(): Promise<OpenApiDocument> {
+  return request<OpenApiDocument>('/api/evidence/openapi.json')
 }
 
 export function getMetrics(): Promise<MetricsOverview> {

@@ -13,7 +13,8 @@ import { evidenceBodyHint, formatBytes, formatCountdown, formatDateTime } from '
 import { Badge, ErrorBanner, Field, InfoBanner, Mono, PageShell } from '../components/ui'
 import { verdictTone } from './EvidencePage'
 
-export function EvidenceDetailPage({ artifactId, onBack }: { artifactId: string; onBack: () => void }) {
+/** 详情页：`evidenceId` 可以是调查命令 id（`cmd_…`）或列表行里的证据 id（`art_…`）。 */
+export function EvidenceDetailPage({ evidenceId, onBack }: { evidenceId: string; onBack: () => void }) {
   const [artifact, setArtifact] = useState<EvidenceArtifact | null>(null)
   const [capabilities, setCapabilities] = useState<EvidenceCapabilities | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -30,7 +31,7 @@ export function EvidenceDetailPage({ artifactId, onBack }: { artifactId: string;
     setSigned(null)
     setProxied(false)
     setSignError(null)
-    getEvidence(artifactId)
+    getEvidence(evidenceId)
       .then((value) => {
         if (!cancelled) setArtifact(value)
       })
@@ -41,7 +42,7 @@ export function EvidenceDetailPage({ artifactId, onBack }: { artifactId: string;
     return () => {
       cancelled = true
     }
-  }, [artifactId])
+  }, [evidenceId])
 
   useEffect(() => {
     if (!signed) return
@@ -69,12 +70,12 @@ export function EvidenceDetailPage({ artifactId, onBack }: { artifactId: string;
     if (capabilities && !capabilities.presign_supported) {
       setSigned(null)
       setProxied(true)
-      window.open(contentUrl(artifactId), '_blank', 'noopener,noreferrer')
+      window.open(contentUrl(evidenceId), '_blank', 'noopener,noreferrer')
       return
     }
     setBusy(true)
     try {
-      const result = await presignEvidence(artifactId)
+      const result = await presignEvidence(evidenceId)
       setSigned(result)
       setProxied(false)
       setNow(Date.now())
@@ -84,7 +85,7 @@ export function EvidenceDetailPage({ artifactId, onBack }: { artifactId: string;
       if (err instanceof ApiError && err.code === 'evidence_presign_unsupported') {
         setSigned(null)
         setProxied(true)
-        window.open(contentUrl(artifactId), '_blank', 'noopener,noreferrer')
+        window.open(contentUrl(evidenceId), '_blank', 'noopener,noreferrer')
         return
       }
       setSignError(err instanceof ApiError ? `${err.message}（${err.code}）` : String(err))

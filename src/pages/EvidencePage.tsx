@@ -27,14 +27,18 @@ export function verdictTone(verdict: string): BadgeTone {
 export function EvidencePage({
   subjectId,
   kind,
+  commandId,
   onOpen,
   onQuery,
 }: {
   subjectId: string
   kind: string
-  onOpen: (artifactId: string) => void
-  onQuery: (query: { subjectId: string; kind: string }) => void
+  /** 调查命令 id（`cmd_id`）：页面上最常用的筛选，也是发起调查的人手里唯一有的。 */
+  commandId: string
+  onOpen: (evidenceId: string) => void
+  onQuery: (query: { cmdId: string; subjectId: string; kind: string }) => void
 }) {
+  const [command, setCommand] = useState(commandId)
   const [subject, setSubject] = useState(subjectId)
   const [selectedKind, setSelectedKind] = useState(kind)
   const [artifacts, setArtifacts] = useState<EvidenceArtifact[] | null>(null)
@@ -47,6 +51,7 @@ export function EvidencePage({
     setError(null)
     try {
       const page = await listEvidence({
+        cmdId: commandId || undefined,
         subjectId: subjectId || undefined,
         kind: kind || undefined,
         limit: 50,
@@ -58,7 +63,7 @@ export function EvidencePage({
     } finally {
       setLoading(false)
     }
-  }, [subjectId, kind])
+  }, [commandId, subjectId, kind])
 
   useEffect(() => {
     void load()
@@ -81,7 +86,7 @@ export function EvidencePage({
   return (
     <PageShell
       title="证据"
-      summary={`按主机 / 类型筛；点一行看元数据。${evidenceBodyHint(capabilities)}`}
+      summary={`按命令 id / 主机 / 类型筛；点一行看元数据。命令 id 就是发起调查时拿到的那个。${evidenceBodyHint(capabilities)}`}
       actions={
         <button type="button" className="button button--ghost" onClick={() => void load()} disabled={loading}>
           {loading ? '加载中…' : '刷新'}
@@ -89,13 +94,24 @@ export function EvidencePage({
       }
     >
       <Block wide>
+      <div className="stack">
       <form
         className="filter-bar"
         onSubmit={(event) => {
           event.preventDefault()
-          onQuery({ subjectId: subject.trim(), kind: selectedKind })
+          onQuery({ cmdId: command.trim(), subjectId: subject.trim(), kind: selectedKind })
         }}
       >
+        <label className="filter-field">
+          <span className="field__label">调查命令 id</span>
+          <input
+            value={command}
+            onChange={(event) => setCommand(event.target.value)}
+            placeholder="cmd_...，留空为全部"
+            autoComplete="off"
+            spellCheck={false}
+          />
+        </label>
         <label className="filter-field">
           <span className="field__label">主机 / 主体</span>
           <input
@@ -140,7 +156,7 @@ export function EvidencePage({
       ) : null}
 
       {artifacts && artifacts.length === 0 ? (
-        <Empty title="没有匹配的证据" hint="换个主机或类型再试；也可能是保留期已过（被清理作业删除）。" />
+        <Empty title="没有匹配的证据" hint="换个命令 id / 主机或类型再试；也可能是保留期已过（被清理作业删除）。" />
       ) : null}
 
       {artifacts && artifacts.length > 0 ? (
@@ -150,6 +166,7 @@ export function EvidencePage({
               <tr>
                 <th>观测时间</th>
                 <th>类型</th>
+                <th>命令 id</th>
                 <th>主体</th>
                 <th>结论</th>
                 <th>敏感度</th>
@@ -164,6 +181,13 @@ export function EvidencePage({
                   <td>
                     {artifact.kind}
                     {artifact.subtype ? <span className="muted"> / {artifact.subtype}</span> : null}
+                  </td>
+                  <td>
+                    {artifact.command_id ? (
+                      <code className="mono">{artifact.command_id}</code>
+                    ) : (
+                      <span className="muted">—</span>
+                    )}
                   </td>
                   <td>
                     <code className="mono">{artifact.subject_id}</code>
@@ -188,6 +212,7 @@ export function EvidencePage({
           </table>
         </div>
       ) : null}
+      </div>
       </Block>
     </PageShell>
   )
