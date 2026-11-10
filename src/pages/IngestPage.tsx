@@ -119,10 +119,10 @@ Content-Type = "application/json"`
  * `vm_metrics_sink` = 现成的 http + ndjson 连接器，endpoint 可覆盖），
  * 不是另起一种连法。
  *
- * 端点只经过环境变量，路径来自 BFF 的 `metrics.import_path` —— 两样都**不在这里写死**：
- * 同一个分组可能同时镜像到网关栈与计算区两份 VM，地址是部署事实。
+ * endpoint 用**真实地址**（BFF 已按配置展开好，含导入路径），不写 `${VAR}` 占位：
+ * 这段是给人 copy 到数据面配置里的，占位符还要再找地方定义一次变量，多一道错的机会。
  */
-function metricsSinkGroup(envName: string, importPath: string): string {
+function metricsSinkGroup(endpoint: string): string {
   return `[sink_group]
 name = "agent-metrics"
 oml = ["agent_uplink_metrics_frame"]
@@ -137,7 +137,7 @@ connect = "vm_metrics_sink"
 tags = ["sink:vmetrics"]
 
 [sink_group.sinks.params]
-endpoint = "\${${envName}}${importPath}"`
+endpoint = "${endpoint}"`
 }
 
 function FailureCard({ dedupe }: { dedupe: string }) {
@@ -325,16 +325,15 @@ function MetricsPanel({ metrics }: { metrics?: IntegrationInfo['metrics'] }) {
       >
         <div className="kv">
           <Field label="写入端点（数据面视角）">
-            <Mono>{metrics.write_url}</Mono>
-            <span className="muted">（导入路径 {metrics.import_path}）</span>
+            <Mono>{metrics.write_url}{metrics.import_path}</Mono>
           </Field>
           <Field label="栈内查询入口">
             同栈 <Mono>{metrics.base_url}</Mono>
             <span className="muted">（BFF 探活与指标页用，数据面不要写这里）</span>
           </Field>
-          <Field label="注入方式">
-            环境变量 <Mono>{metrics.env}</Mono>
-            <span className="muted">（不要在配置文件里写死地址）</span>
+          <Field label="同一分组写两份 VM">
+            把 endpoint 换成 <Mono>{metrics.env}</Mono>
+            <span className="muted">（环境变量由部署注入，仅用于并行双写时切换）</span>
           </Field>
           <Field label="认证">无（内网可信）；没有 token / 证书要配</Field>
           <Field label="数据格式">VM 的 JSON line（计数点），由 sink 自己产出</Field>
@@ -344,20 +343,14 @@ function MetricsPanel({ metrics }: { metrics?: IntegrationInfo['metrics'] }) {
 
       <InfoBanner>
         指标与证据 / atlas 的区别：<strong>没有信封</strong>，也不需要 OML 输出契约字段。
-        只要一条 <Mono>sink_group</Mono> 把 <Mono>monitor</Mono> 的统计点镜像到 VM；
-        端点按数据面所在网络从环境变量注入。
+        只要一条 <Mono>sink_group</Mono> 把 <Mono>monitor</Mono> 的统计点镜像到 VM。
       </InfoBanner>
 
       <div className="stack">
         <CodeBlock
           label="topology/sinks/business.d/agent_metrics.toml"
-          hint="在 agent-metrics 分组里加一个 VM sink；两份存储并行时只改 endpoint 的变量"
-          code={metricsSinkGroup(metrics.env, metrics.import_path)}
-        />
-        <CodeBlock
-          label="环境变量（数据面进程可见）"
-          hint="填数据面能拨到的地址；同一个分组镜像到两份 VM 时只改这一行的值"
-          code={`${metrics.env}=${metrics.write_url}`}
+          hint="在 agent-metrics 分组里加一个 VM sink，endpoint 直接写地址"
+          code={metricsSinkGroup(`${metrics.write_url}${metrics.import_path}`)}
         />
       </div>
 
