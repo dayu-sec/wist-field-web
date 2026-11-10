@@ -61,18 +61,9 @@ function CodeBlock({
   )
 }
 
-/** 只取这条通道自己的环境变量；一条都没有时返回空串（调用方自行决定要不要显示）。 */
-function envLines(env: Record<string, string>, keyPart: string): string {
-  return Object.entries(env)
-    .filter(([key]) => key.includes(keyPart))
-    .map(([key, value]) => `${key}=${value}`)
-    .join('\n')
-}
 
 /**
- * 入湖配置只给 **sink 分组**：连接器一律复用 `connectors/sink.d` 里现成的 `http_sink`，
- * 不再为证据 / atlas 各建一个 `[[connectors]]`（那只是把同一份 http 参数拄了两次）。
- * 实例侧只覆盖 `http_sink` 的 allow_override：endpoint / fmt / batch_size / headers。
+ * 入湖 sink 分组。三段样例共用这一个形状：地址直写，不带占位。
  */
 function httpSinkGroup({
   name,
@@ -98,7 +89,6 @@ batch_timeout_ms = 300
 
 [[sink_group.sinks]]
 name = "${sinkName}"
-# 现成的 http 连接器（connectors/sink.d 里已有），不新增 connectors。
 connect = "http_sink"
 tags = ["sink:${sinkTag}"]
 
@@ -113,14 +103,7 @@ Content-Type = "application/json"`
 }
 
 /**
- * 运行指标的 sink 分组。
- *
- * 照**生产里已经在跑的那一组**写（`business.d/agent_metrics.toml`：
- * `vm_metrics_sink` = 现成的 http + ndjson 连接器，endpoint 可覆盖），
- * 不是另起一种连法。
- *
- * endpoint 用**真实地址**（BFF 已按配置展开好，含导入路径），不写 `${VAR}` 占位：
- * 这段是给人 copy 到数据面配置里的，占位符还要再找地方定义一次变量，多一道错的机会。
+ * 运行指标的 sink 分组。endpoint 用真实地址，不带占位符。
  */
 function metricsSinkGroup(endpoint: string): string {
   return `[sink_group]
@@ -132,7 +115,6 @@ batch_timeout_ms = 300
 
 [[sink_group.sinks]]
 name = "vm_metrics_console"
-# 现成的 vm_metrics_sink（connectors/sink.d 里已有：http + ndjson），不新增 connectors。
 connect = "vm_metrics_sink"
 tags = ["sink:vmetrics"]
 
@@ -153,7 +135,6 @@ function FailureCard({ dedupe }: { dedupe: string }) {
 }
 
 function EvidencePanel({ info }: { info: IntegrationInfo }) {
-  const evidenceEnv = envLines(info.warp_parse.env, 'EVIDENCE')
   return (
     <>
       <Card
@@ -188,8 +169,6 @@ function EvidencePanel({ info }: { info: IntegrationInfo }) {
       </Card>
 
       <InfoBanner>
-        <strong>不新建连接器</strong>：直接用现成的 <Mono>http_sink</Mono>（在{' '}
-        <Mono>connectors/sink.d</Mono> 里已有），sink 实例只覆盖 endpoint 等参数。
         发出去的就是 OML 的输出（不做字段映射），所以 OML 必须产出 <Mono>cust_id</Mono> /{' '}
         <Mono>cmd_id</Mono> / <Mono>content</Mono>。连接器没有 TLS 参数，写端口只在内网开放。
       </InfoBanner>
@@ -197,7 +176,7 @@ function EvidencePanel({ info }: { info: IntegrationInfo }) {
       <div className="stack">
         <CodeBlock
           label="topology/sinks/business.d/evidence_uplink.toml"
-          hint="sink 分组：复用现成的 http_sink，只覆盖 endpoint / fmt；不用再定义 connectors"
+          hint="证据三字段 → http_sink"
           code={httpSinkGroup({
             name: 'evidence-uplink',
             oml: 'evidence_uplink',
@@ -207,13 +186,6 @@ function EvidencePanel({ info }: { info: IntegrationInfo }) {
             endpoint: info.evidence.write_url,
           })}
         />
-        {evidenceEnv ? (
-          <CodeBlock
-            label="环境变量（数据面进程可见）"
-            hint="只有写端点地址；auth = none 时不需要 token"
-            code={evidenceEnv}
-          />
-        ) : null}
         <CodeBlock
           label="请求体（三字段）"
           hint="content 给字符串或 JSON 对象都行；cust_id 同时就是分区键"
@@ -228,7 +200,6 @@ function EvidencePanel({ info }: { info: IntegrationInfo }) {
 
 function AtlasPanel({ info }: { info: IntegrationInfo }) {
   const atlas = info.atlas ?? null
-  const atlasEnv = envLines(info.warp_parse.env, 'ATLAS')
 
   if (!atlas) {
     return (
@@ -270,14 +241,14 @@ function AtlasPanel({ info }: { info: IntegrationInfo }) {
 
       <InfoBanner>
         <Mono>content</Mono> 就是网关 <Mono>agent-discovery.jsonl</Mono> 的一行
-        （<Mono>schema</Mono> / <Mono>agent_id</Mono> / <Mono>body</Mono>…）：atlas 用与读文件路径
-        <strong>同一个</strong>转换函数，不需要在这里重组。单次最多 64 条，body 上限 16 MB。
+        （<Mono>schema</Mono> / <Mono>agent_id</Mono> / <Mono>body</Mono>…），不需要重组。
+        单次最多 64 条，body 上限 16 MB。
       </InfoBanner>
 
       <div className="stack">
         <CodeBlock
           label="topology/sinks/business.d/atlas_uplink.toml"
-          hint="sink 分组：同样复用 http_sink，只覆盖 endpoint；不用再定义 connectors"
+          hint="资产快照两字段 → http_sink"
           code={httpSinkGroup({
             name: 'atlas-uplink',
             oml: 'atlas_uplink',
@@ -287,13 +258,6 @@ function AtlasPanel({ info }: { info: IntegrationInfo }) {
             endpoint: atlas.write_url,
           })}
         />
-        {atlasEnv ? (
-          <CodeBlock
-            label="环境变量（数据面进程可见）"
-            hint="只有写端点地址；auth = none 时不需要 token"
-            code={atlasEnv}
-          />
-        ) : null}
         <CodeBlock
           label="请求体（两字段）"
           hint="content 是 DSNAP 记录或记录数组；多传的键会被忽略"
@@ -343,13 +307,13 @@ function MetricsPanel({ metrics }: { metrics?: IntegrationInfo['metrics'] }) {
 
       <InfoBanner>
         指标与证据 / atlas 的区别：<strong>没有信封</strong>，也不需要 OML 输出契约字段。
-        只要一条 <Mono>sink_group</Mono> 把 <Mono>monitor</Mono> 的统计点镜像到 VM。
+        只要一条 <Mono>sink_group</Mono> 把 <Mono>agent-metrics</Mono> 的统计点镜像到 VM。
       </InfoBanner>
 
       <div className="stack">
         <CodeBlock
           label="topology/sinks/business.d/agent_metrics.toml"
-          hint="在 agent-metrics 分组里加一个 VM sink，endpoint 直接写地址"
+          hint="VM 计数点 → vm_metrics_sink"
           code={metricsSinkGroup(`${metrics.write_url}${metrics.import_path}`)}
         />
       </div>
