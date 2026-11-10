@@ -311,7 +311,7 @@ function MetricsPanel({ metrics }: { metrics?: IntegrationInfo['metrics'] }) {
     return (
       <InfoBanner>
         BFF 没拿到数据面的写入地址（<Mono>[metrics] write_url</Mono>）。
-        栈模板里它是由 <Mono>EVIDENCE_SINK_PUBLIC_HOST</Mono> + <Mono>VM_HOST_PORT</Mono> 派生的，
+        栈模板里它是由 <Mono>METRICS_SINK_PUBLIC_HOST</Mono> + <Mono>VM_HOST_PORT</Mono> 派生的，
         不需要额外加变量；自定义配置里就自己填一条（数据面视角的 VM 地址）后重启 BFF。
       </InfoBanner>
     )
