@@ -310,9 +310,9 @@ function MetricsPanel({ metrics }: { metrics?: IntegrationInfo['metrics'] }) {
   if (!metrics) {
     return (
       <InfoBanner>
-        BFF 没配 <Mono>[metrics] write_url</Mono>，所以这里拿不到数据面的写入地址。
-        在 <Mono>field-api.toml</Mono> 里填上（数据面视角的 VM 地址）后重启 BFF 即可；
-        不接运行指标就忽略这一块。
+        BFF 没拿到数据面的写入地址（<Mono>[metrics] write_url</Mono>）。
+        栈模板里它是由 <Mono>EVIDENCE_SINK_PUBLIC_HOST</Mono> + <Mono>VM_HOST_PORT</Mono> 派生的，
+        不需要额外加变量；自定义配置里就自己填一条（数据面视角的 VM 地址）后重启 BFF。
       </InfoBanner>
     )
   }
