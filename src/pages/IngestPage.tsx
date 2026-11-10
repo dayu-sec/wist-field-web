@@ -149,19 +149,6 @@ function EvidencePanel({ info }: { info: IntegrationInfo }) {
           <Field label="认证">
             无（<Mono>auth = "none"</Mono>，内网可信）；将来换成 HTTPS 双向认证
           </Field>
-          <Field label="客户">
-            <Mono>{info.evidence.customer}</Mono>
-            <span className="muted">（租户就是客户）</span>
-          </Field>
-          <Field label="允许的 kind">
-            <span className="stack-inline">
-              {info.evidence.allowed_kinds.map((kind) => (
-                <span key={kind} className="badge badge--gray">
-                  {kind}
-                </span>
-              ))}
-            </span>
-          </Field>
           <Field label="三字段">
             <Mono>cust_id</Mono> / <Mono>cmd_id</Mono> / <Mono>content</Mono>
           </Field>
@@ -224,10 +211,6 @@ function AtlasPanel({ info }: { info: IntegrationInfo }) {
           </Field>
           <Field label="认证">
             无（<Mono>auth = "none"</Mono>，内网可信）；将来换成 HTTPS 双向认证
-          </Field>
-          <Field label="租户">
-            <Mono>{atlas.customer}</Mono>
-            <span className="muted">（atlas 租户 UUID，不是客户号）</span>
           </Field>
           <Field label="两字段">
             <Mono>cust_id</Mono> / <Mono>content</Mono>
