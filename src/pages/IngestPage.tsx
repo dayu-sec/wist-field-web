@@ -112,30 +112,33 @@ timeout_secs = 5
 Content-Type = "application/json"`
 }
 
-const METRICS_SINK_GROUP = `[sink_group]
-name = "monitor"
-batch_size = 1
+/**
+ * 运行指标的 sink 分组。
+ *
+ * 照**生产里已经在跑的那一组**写（`business.d/agent_metrics.toml`：
+ * `vm_metrics_sink` = 现成的 http + ndjson 连接器，endpoint 可覆盖），
+ * 不是另起一种连法。
+ *
+ * 端点只经过环境变量，路径来自 BFF 的 `metrics.import_path` —— 两样都**不在这里写死**：
+ * 同一个分组可能同时镜像到网关栈与计算区两份 VM，地址是部署事实。
+ */
+function metricsSinkGroup(envName: string, importPath: string): string {
+  return `[sink_group]
+name = "agent-metrics"
+oml = ["agent_uplink_metrics_frame"]
+tags = ["biz:agent-metrics"]
+batch_size = 1024
 batch_timeout_ms = 300
 
 [[sink_group.sinks]]
-connect = "file_proto_text_sink"
-
-[sink_group.sinks.params]
-file = "monitor.dat"
-
-[sink_group.sinks.expect]
-max = 1.0
-
-# 统计指标镜像到 VictoriaMetrics。
-[[sink_group.sinks]]
-name = "metrics_vmetrics_sink"
-connect = "victoriametrics_sink"
+name = "vm_metrics_console"
+# 现成的 vm_metrics_sink（connectors/sink.d 里已有：http + ndjson），不新增 connectors。
+connect = "vm_metrics_sink"
 tags = ["sink:vmetrics"]
 
 [sink_group.sinks.params]
-endpoint = "\${WIST_METRICS_ENDPOINT}"`
-
-const METRICS_ENV = `WIST_METRICS_ENDPOINT=http://<field-stack 内网地址>:<VM_HOST_PORT>`
+endpoint = "\${${envName}}${importPath}"`
+}
 
 function FailureCard({ dedupe }: { dedupe: string }) {
   return (
@@ -303,29 +306,39 @@ function AtlasPanel({ info }: { info: IntegrationInfo }) {
   )
 }
 
-function MetricsPanel() {
+function MetricsPanel({ metrics }: { metrics?: IntegrationInfo['metrics'] }) {
+  if (!metrics) {
+    return (
+      <InfoBanner>
+        BFF 没配 <Mono>[metrics] write_url</Mono>，所以这里拿不到数据面的写入地址。
+        在 <Mono>field-api.toml</Mono> 里填上（数据面视角的 VM 地址）后重启 BFF 即可；
+        不接运行指标就忽略这一块。
+      </InfoBanner>
+    )
+  }
   return (
     <>
       <Card
         title="上报方式"
-        subtitle="不是三字段契约：wparse 自带的 victoriametrics_sink 把统计点按 VM 的 JSON line 推进去"
+        subtitle="不是三字段契约：现成的 vm_metrics_sink 把统计点按 VM 的 JSON line 推进去"
         aside={<Badge tone="blue">VM</Badge>}
       >
         <div className="kv">
-          <Field label="端点">
-            同栈 <Mono>http://metrics:8428</Mono>；跨机{' '}
-            <Mono>{'http://<field-stack 内网地址>:<VM_HOST_PORT>'}</Mono>
-            <span className="muted">（栈默认 18428）</span>
+          <Field label="写入端点（数据面视角）">
+            <Mono>{metrics.write_url}</Mono>
+            <span className="muted">（导入路径 {metrics.import_path}）</span>
+          </Field>
+          <Field label="栈内查询入口">
+            同栈 <Mono>{metrics.base_url}</Mono>
+            <span className="muted">（BFF 探活与指标页用，数据面不要写这里）</span>
           </Field>
           <Field label="注入方式">
-            环境变量 <Mono>WIST_METRICS_ENDPOINT</Mono>
+            环境变量 <Mono>{metrics.env}</Mono>
             <span className="muted">（不要在配置文件里写死地址）</span>
           </Field>
           <Field label="认证">无（内网可信）；没有 token / 证书要配</Field>
           <Field label="数据格式">VM 的 JSON line（计数点），由 sink 自己产出</Field>
-          <Field label="探活">
-            数据场「接口可用性」页的「运行指标存储」一行
-          </Field>
+          <Field label="探活">数据场「接口可用性」页的「运行指标存储」一行</Field>
         </div>
       </Card>
 
@@ -337,14 +350,14 @@ function MetricsPanel() {
 
       <div className="stack">
         <CodeBlock
-          label="topology/sinks/infra.d/metrics_uplink.toml"
-          hint="sink 分组：monitor 统计点 → VictoriaMetrics"
-          code={METRICS_SINK_GROUP}
+          label="topology/sinks/business.d/agent_metrics.toml"
+          hint="在 agent-metrics 分组里加一个 VM sink；两份存储并行时只改 endpoint 的变量"
+          code={metricsSinkGroup(metrics.env, metrics.import_path)}
         />
         <CodeBlock
           label="环境变量（数据面进程可见）"
-          hint="同栈写 http://metrics:8428；跨机用 field-stack 的内网地址 + 宿主端口"
-          code={METRICS_ENV}
+          hint="填数据面能拨到的地址；同一个分组镜像到两份 VM 时只改这一行的值"
+          code={`${metrics.env}=${metrics.write_url}`}
         />
       </div>
 
@@ -419,7 +432,7 @@ export function IngestPage({
             >
               {active === 'evidence' ? <EvidencePanel info={info} /> : null}
               {active === 'atlas' ? <AtlasPanel info={info} /> : null}
-              {active === 'metrics' ? <MetricsPanel /> : null}
+              {active === 'metrics' ? <MetricsPanel metrics={info.metrics} /> : null}
             </div>
           ) : null}
         </div>

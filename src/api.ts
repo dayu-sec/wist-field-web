@@ -275,6 +275,19 @@ export interface IntegrationInfo {
     customer: string
     record: Record<string, unknown>
   } | null
+  /**
+   * 运行指标写端点（**数据面视角**）。
+   * BFF 没配 `[metrics] write_url` 时为 `null` —— 不编造占位地址。
+   */
+  metrics?: {
+    write_url: string
+    /** VM 的 JSON line 导入路径（`/api/v1/import`）。 */
+    import_path: string
+    /** 数据面读地址用的环境变量名（`CONSOLE_VM_ENDPOINT`）。 */
+    env: string
+    /** BFF 视角的查询入口（栈内），仅用于说明探活归属。 */
+    base_url: string
+  } | null
   warp_parse: {
     /** 数据面进程要看到的环境变量（写端点地址）。 */
     env: Record<string, string>
