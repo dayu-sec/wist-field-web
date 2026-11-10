@@ -4,6 +4,15 @@ import { toggleAppTheme, useAppTheme } from '../theme'
 
 export type Tab = 'overview' | 'evidence' | 'topology' | 'metrics' | 'health' | 'devices' | 'ingest'
 
+/**
+ * 左下角的版本号。CI 传的是 git tag（`v0.2.6-alpha`），本地构建传 `dev` 或 `0.2.6-local`
+ * —— 统一去掉前缀 `v` 后只拼一次，否则会渲染成 `vv0.2.6-alpha`。
+ */
+function versionLabel(): string {
+  const version = __APP_VERSION__.replace(/^v/, '')
+  return version === '' || version === 'dev' ? 'dev' : `v${version}`
+}
+
 const TAB_LABELS: Record<Tab, string> = {
   overview: '概览',
   evidence: '证据',
@@ -207,8 +216,8 @@ export function Shell({
         </nav>
 
         <footer className="sidebar-footer">
-          <span className="sidebar-version">v{__APP_VERSION__}</span>
-          <span className="sidebar-note">wist-field-api · 计算区</span>
+          <span className="sidebar-version">{versionLabel()}</span>
+          <span className="sidebar-note">wist-field-web · 计算区</span>
         </footer>
       </aside>
 
