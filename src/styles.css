@@ -2337,3 +2337,54 @@ a:focus-visible {
 .api-op__curl button {
   flex: none;
 }
+
+/* 选客户：多客户站点的必经一步（单客户站点不会渲染这个块）。 */
+.tenant-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.gate__link {
+  align-self: flex-start;
+  background: none;
+  border: none;
+  padding: 0;
+  color: inherit;
+  opacity: 0.7;
+  font-size: 13px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.gate__link:hover {
+  opacity: 1;
+}
+
+/* 多客户：当前客户常驻侧栏（两个客户的界面长得一样，忘了自己在哪个客户里最贵）。 */
+.tenant-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0 0;
+  padding: 4px 8px;
+  border: 1px solid var(--border, #2a2f3a);
+  border-radius: 999px;
+  background: none;
+  color: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.tenant-chip__label {
+  opacity: 0.6;
+}
+
+.tenant-chip__id {
+  font-family: var(--mono, ui-monospace);
+  font-weight: 600;
+}
+
+.tenant-chip:hover {
+  border-color: var(--accent, #4c8dff);
+}

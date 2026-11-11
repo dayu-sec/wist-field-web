@@ -4,7 +4,8 @@
 // 这个文件不持有任何**服务**凭据（证据服务的证书、COS 的密钥都不在这里）。
 // 唯一的凭据是操作员自己的访问令牌（`wcr_…`），由 `auth.ts` 管，进 `Authorization` 头。
 
-import { getToken, notifyUnauthorized } from './auth'
+import { getToken, notifyTenantRejected, notifyUnauthorized } from './auth'
+import { withTenant } from './tenant'
 
 /** 每个数据源的可用状态。`not_configured` 不是错误 —— 是「这个域还没接」。 */
 export type SourceStateName = 'ok' | 'unavailable' | 'not_configured'
@@ -98,7 +99,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const token = getToken()
   let response: Response
   try {
-    response = await fetch(path, {
+    // 所有 `/api/*` 都从这里出去：客户选择在 `withTenant` 里统一拼上（漏一个就是查错客户）。
+    response = await fetch(withTenant(path), {
       ...init,
       headers: {
         Accept: 'application/json',
@@ -129,6 +131,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       // token 没了 / 过期 / 被撤销：清掉本地副本并让 App 弹出输入框。
       notifyUnauthorized()
     }
+    if (code === 'tenant_not_allowed' || code === 'tenant_required') {
+      // 当前选中的客户不可用了（或这套栈要求先选）：清掉选择，回选客户页。
+      notifyTenantRejected()
+    }
     throw new ApiError(
       response.status,
       code,
@@ -141,6 +147,21 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export function getHealth(): Promise<ConsoleHealth> {
   return request<ConsoleHealth>('/api/health')
+}
+
+/** `GET /api/session`：本令牌能看的客户集合。
+ *
+ * **没有默认客户**：BFF 故意不回 —— 前端不许自己猜一个，那类退化正是看错客户的来源。
+ * `tenants.length > 1` 时页面必须先让用户选。
+ */
+export interface SessionInfo {
+  subject: string
+  roles: string[]
+  tenants: string[]
+}
+
+export function getSession(): Promise<SessionInfo> {
+  return request<SessionInfo>('/api/session')
 }
 
 /** 登录的结果：把令牌换成「你是谁 + 给了什么角色」。 */
@@ -250,7 +271,7 @@ export function presignEvidence(id: string): Promise<PresignResult> {
  * 页面直接开这个地址，由 BFF 带身份去证据服务取原文（`id` 同上）。
  */
 export function contentUrl(id: string): string {
-  return `/api/evidence/${encodeURIComponent(id)}/content`
+  return withTenant(`/api/evidence/${encodeURIComponent(id)}/content`)
 }
 
 export interface IntegrationInfo {

@@ -158,6 +158,10 @@ interface ShellProps {
   onRefresh: () => void
   /** 退出：清掉本标签页的访问令牌，回到令牌入口。 */
   onSignOut: () => void
+  /** 多客户站点：当前客户（单客户站点为 `null`，不显示任何客户 UI）。 */
+  tenant?: string | null
+  /** 切换客户：清掉选择，回到选客户页。 */
+  onSwitchTenant?: () => void
   children: ReactNode
 }
 
@@ -170,6 +174,8 @@ export function Shell({
   lastSyncedAt,
   onRefresh,
   onSignOut,
+  tenant,
+  onSwitchTenant,
   children,
 }: ShellProps) {
   const theme = useAppTheme()
@@ -301,6 +307,18 @@ export function Shell({
               </svg>
             </button>
           </div>
+          {/* 多客户站点：当前客户必须一直可见 —— 否则两个客户的界面长得一模一样。 */}
+          {tenant ? (
+            <button
+              type="button"
+              className="tenant-chip"
+              onClick={onSwitchTenant}
+              title="切换客户（数据按客户隔离）"
+            >
+              <span className="tenant-chip__label">客户</span>
+              <span className="tenant-chip__id">{tenant}</span>
+            </button>
+          ) : null}
         </div>
 
         <main className="main">{children}</main>

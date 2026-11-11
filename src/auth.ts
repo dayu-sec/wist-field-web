@@ -40,3 +40,17 @@ export function notifyUnauthorized(): void {
   clearToken()
   window.dispatchEvent(new Event(UNAUTHORIZED_EVENT))
 }
+
+/**
+ * 租户被拒时广播一次：App 据此回到「选客户」页。
+ *
+ * 两种来源都是“当前选择不可用”，处理一致：
+ * - 403 `tenant_not_allowed`（不在可选集合里，例如令牌换了或客户被撤）；
+ * - 400 `tenant_required`（多客户站点没带 `?tenant=`）。
+ * 清掉本地选择，让用户重新选 —— 不静默改用一个“默认客户”。
+ */
+export const TENANT_REJECTED_EVENT = 'wist:tenant-rejected'
+
+export function notifyTenantRejected(): void {
+  window.dispatchEvent(new Event(TENANT_REJECTED_EVENT))
+}

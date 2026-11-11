@@ -1,9 +1,16 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
-import { ApiError, getHealth, type ConsoleHealth } from './api'
-import { UNAUTHORIZED_EVENT, clearToken, getToken } from './auth'
+import { ApiError, getHealth, getSession, type ConsoleHealth } from './api'
+import {
+  TENANT_REJECTED_EVENT,
+  UNAUTHORIZED_EVENT,
+  clearToken,
+  getToken,
+} from './auth'
 import { Shell, type Tab } from './components/Shell'
 import { InitGate } from './components/InitGate'
+import { TenantGate } from './components/TenantGate'
 import { TokenGate } from './components/TokenGate'
+import { clearTenant, getTenant } from './tenant'
 import { EvidenceDetailPage } from './pages/EvidenceDetailPage'
 import { EvidencePage } from './pages/EvidencePage'
 import { HealthPage } from './pages/HealthPage'
@@ -56,11 +63,27 @@ export default function App() {
   // 这一档要排在令牌之前 —— 没材料时拿着令牌也什么都进不去。
   const [initRequired, setInitRequired] = useState(false)
   const [initDetail, setInitDetail] = useState<string | null>(null)
+  // 多客户：本令牌能看的客户集合（BFF 只给集合，**不给默认客户**）。
+  const [tenants, setTenants] = useState<string[]>([])
+  const [tenantRejected, setTenantRejected] = useState<string | null>(null)
+  // 当前客户；没选时为 null。`sessionStorage` 是唯一来源（不在这里另存一份 state）。
+  const [tenant, setTenantState] = useState<string | null>(() => getTenant())
 
   useEffect(() => {
     const onUnauthorized = () => setNeedToken(true)
     window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized)
-    return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized)
+    // 客户被拒（403 越界 / 400 未指定）：清掉选择，回到选客户页。
+    const onTenantRejected = () => {
+      const previous = getTenant()
+      clearTenant()
+      setTenantState(null)
+      setTenantRejected(previous)
+    }
+    window.addEventListener(TENANT_REJECTED_EVENT, onTenantRejected)
+    return () => {
+      window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized)
+      window.removeEventListener(TENANT_REJECTED_EVENT, onTenantRejected)
+    }
   }, [])
 
   useEffect(() => {
@@ -88,6 +111,31 @@ export default function App() {
       setSyncing(false)
     }
   }, [])
+
+  // 登录后拉一次“能看哪些客户”：单客户站点永远只有 0/1 项，不会弹选择页。
+  // 拉失败不阻断（例如老版本 BFF 没有 `/api/session`）—— 按单客户站点跑。
+  useEffect(() => {
+    if (needToken) return
+    let alive = true
+    void getSession()
+      .then((value) => {
+        if (!alive) return
+        setTenants(value.tenants)
+        // 已选的客户不在集合里（令牌换了 / 客户被撤）→ 旧选择作废。
+        const current = getTenant()
+        if (current && !value.tenants.includes(current)) {
+          clearTenant()
+          setTenantState(null)
+          setTenantRejected(current)
+        }
+      })
+      .catch(() => {
+        if (alive) setTenants([])
+      })
+    return () => {
+      alive = false
+    }
+  }, [needToken])
 
   // 健康状态 30 秒拉一次：页面数据本身由各页自己按需拉，不在这里做全量轮询。
   useEffect(() => {
@@ -130,9 +178,34 @@ export default function App() {
     )
   }
 
+  // 多客户站点：没选客户（或刚被拒）之前不进主界面 —— 所有页面都按客户取数，
+  // 用错客户看到的是一整套错数据，比“多一步”贵得多。
+  const mustPickTenant = tenants.length > 1 && (tenant === null || !tenants.includes(tenant))
+  if (mustPickTenant) {
+    return (
+      <TenantGate
+        tenants={tenants}
+        rejected={tenantRejected}
+        onPick={(picked) => {
+          setTenantState(picked)
+          setTenantRejected(null)
+          void refresh()
+        }}
+        onSignOut={signOut}
+      />
+    )
+  }
+
   return (
     <Shell
       tab={route.tab}
+      // 顶部/侧栏只在多客户时显示当前客户与切换入口。
+      tenant={tenants.length > 1 ? tenant : null}
+      onSwitchTenant={() => {
+        clearTenant()
+        setTenantState(null)
+        setTenantRejected(null)
+      }}
       onTab={(tab) => navigate(tab === 'overview' ? '/overview' : `/${tab}`)}
       connected={connected}
       syncing={syncing}
