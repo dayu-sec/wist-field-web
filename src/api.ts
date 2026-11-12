@@ -439,6 +439,58 @@ export interface MetricsHistorySeries {
   points: [number, number][]
 }
 
+/**
+ * 中间件一族的当前读数（Kafka / MySQL / PG / Doris / 容器）。
+ *
+ * 后端只给「家族 → 序列 → 当前值」，布局在页面：`instance` / `state` / `group` / `topic`
+ * 这些 label 原样带出来，前端按 `instance` 透视。空数组 = 这族契约在、采集没开。
+ */
+export interface MiddlewareSample {
+  metric: string
+  value: number
+  labels: Record<string, string>
+}
+
+export interface MiddlewareFamily {
+  /** `kafka` / `mysql` / `pg` / `doris` / `container`。 */
+  kind: string
+  label: string
+  prefix: string
+  metrics: MiddlewareSample[]
+}
+
+export interface MiddlewareOverview {
+  families: MiddlewareFamily[]
+}
+
+export function getMetricsMiddleware(): Promise<MiddlewareOverview> {
+  return request<MiddlewareOverview>('/api/metrics/middleware')
+}
+
+/**
+ * 一屏主机的三条走势（主机卡上的迷你图）。
+ *
+ * 按 agent 单查 history 的话，13 台就是 13 个请求、每 30 秒一轮；这里一次给全队。
+ * 单位：`load_1m` 是原始负载（页面按核数折算），内存 / 磁盘是 0..1 的比例。
+ */
+export interface MetricsHostTrend {
+  load_1m: [number, number][]
+  memory_usage: [number, number][]
+  disk_usage: [number, number][]
+}
+
+export interface MetricsHostsHistory {
+  window_seconds: number
+  step_seconds: number
+  /** agent_id → 三条走势；没有数据的主机不出现。 */
+  hosts: Record<string, MetricsHostTrend>
+}
+
+export function getMetricsHostsHistory(windowSeconds: number): Promise<MetricsHostsHistory> {
+  const params = new URLSearchParams({ window_seconds: String(windowSeconds) })
+  return request<MetricsHostsHistory>(`/api/metrics/hosts/history?${params.toString()}`)
+}
+
 export interface MetricsAgentHistory {
   agent_id: string
   window_seconds: number
@@ -538,4 +590,86 @@ export function getMetricsHistory(
   return request<MetricsAgentHistory>(
     `/api/metrics/agents/${encodeURIComponent(agentId)}/history?${params.toString()}`,
   )
+}
+
+// ---------------------------------------------------------------------------
+// 网络资产（VPC / 子网 / 公网 IP）
+//
+// 数据来自 atlas 的读接口，经 BFF 的 `/api/atlas/*` 通配代理（令牌与客户选择都在
+// 那一道门里完成）。**不走 graph 包的 client**：那是给画布用的，这两个是列表接口，
+// 而且 baseUrl / 令牌口径与这里不同 —— 混用会让「客户」漏传一次。
+// ---------------------------------------------------------------------------
+
+/** atlas 的统一信封（`status` 不是 `ok` 就说明是错误体）。 */
+interface AtlasEnvelope<T> {
+  status: string
+  data?: T
+  code?: string
+  message?: string
+}
+
+function unwrapAtlas<T>(body: AtlasEnvelope<T>): T {
+  if (body.status !== 'ok' || body.data === undefined) {
+    throw new ApiError(200, body.code ?? 'atlas_error', body.message ?? 'atlas 返回了非 ok 的响应')
+  }
+  return body.data
+}
+
+export interface NetworkSegmentItem {
+  id: string
+  externalRef: string | null
+  name: string
+  cidr: string | null
+  gatewayIp: string | null
+  addressFamily: string
+  cloudAccount: string | null
+  stale: boolean
+  /** 还挂在这个子网上的主机数（atlas 只数未封口的关联）。 */
+  hostCount: number
+}
+
+export interface NetworkDomainItem {
+  id: string
+  /** 云侧 `VpcId`。名字不是身份：腾讯云每个地域都送建 `Default-VPC`。 */
+  externalRef: string | null
+  name: string
+  cidr: string | null
+  cloudAccount: string | null
+  stale: boolean
+  staleAt: string | null
+  segments: NetworkSegmentItem[]
+}
+
+export interface ElasticIpItem {
+  id: string
+  externalRef: string
+  address: string
+  /** `bound` / `unbound` / `unknown`。 */
+  status: string
+  chargeType: string | null
+  bandwidthMbps: number | null
+  cloudAccount: string | null
+  boundTargetKind: string | null
+  boundHostId: string | null
+  boundExternalTargetRef: string | null
+  boundSince: string | null
+  lastInventoryAt: string
+  stale: boolean
+  staleAt: string | null
+}
+
+/** VPC + 子网（含每段主机数）。 */
+export async function getNetworkDomains(): Promise<NetworkDomainItem[]> {
+  const body = await request<AtlasEnvelope<{ networkDomains: NetworkDomainItem[] }>>(
+    '/api/atlas/network-domains?limit=200',
+  )
+  return unwrapAtlas(body).networkDomains
+}
+
+/** 弹性公网 IP（含绑定目标）。默认隐藏云上已释放的。 */
+export async function getElasticIps(): Promise<ElasticIpItem[]> {
+  const body = await request<AtlasEnvelope<{ elasticIps: ElasticIpItem[] }>>(
+    '/api/atlas/elastic-ips?limit=500',
+  )
+  return unwrapAtlas(body).elasticIps
 }

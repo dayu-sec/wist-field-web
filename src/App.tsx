@@ -18,13 +18,23 @@ import { OverviewPage } from './pages/Overview'
 import { PlaceholderPage } from './pages/PlaceholderPage'
 import { IngestPage } from './pages/IngestPage'
 import { MetricsPage } from './pages/MetricsPage'
+import { NetworkPage } from './pages/NetworkPage'
 
 // 拓扑画布带 cytoscape（~200KB gzip）：只有进这一页才加载，别拖慢首屏。
 const TopologyPage = lazy(() =>
   import('./pages/TopologyPage').then((module) => ({ default: module.TopologyPage })),
 )
 
-const TABS: Tab[] = ['overview', 'evidence', 'topology', 'metrics', 'health', 'devices', 'ingest']
+const TABS: Tab[] = [
+  'overview',
+  'evidence',
+  'topology',
+  'network',
+  'metrics',
+  'health',
+  'devices',
+  'ingest',
+]
 
 interface Route {
   tab: Tab
@@ -261,6 +271,8 @@ export default function App() {
           <TopologyPage />
         </Suspense>
       ) : null}
+
+      {route.tab === 'network' ? <NetworkPage /> : null}
 
       {route.tab === 'health' ? (
         <HealthPage

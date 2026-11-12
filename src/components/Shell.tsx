@@ -2,7 +2,15 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { formatRelativeTime } from '../format'
 import { toggleAppTheme, useAppTheme } from '../theme'
 
-export type Tab = 'overview' | 'evidence' | 'topology' | 'metrics' | 'health' | 'devices' | 'ingest'
+export type Tab =
+  | 'overview'
+  | 'evidence'
+  | 'topology'
+  | 'network'
+  | 'metrics'
+  | 'health'
+  | 'devices'
+  | 'ingest'
 
 /**
  * 左下角的版本号。CI 传的是 git tag（`v0.2.6-alpha`），本地构建传 `dev` 或 `0.2.6-local`
@@ -17,6 +25,7 @@ const TAB_LABELS: Record<Tab, string> = {
   overview: '概览',
   evidence: '证据',
   topology: '资产拓扑',
+  network: '网络资产',
   metrics: '运行指标',
   health: '接口可用性',
   devices: '安全设备',
@@ -34,6 +43,7 @@ const NAV_MAIN: { tab: Tab; icon: ReactNode }[] = [
   { tab: 'overview', icon: <IconOverview /> },
   { tab: 'evidence', icon: <IconEvidence /> },
   { tab: 'topology', icon: <IconTopology /> },
+  { tab: 'network', icon: <IconNetwork /> },
   { tab: 'metrics', icon: <IconMetrics /> },
   { tab: 'devices', icon: <IconDevice /> },
 ]
@@ -94,6 +104,17 @@ function IconTopology() {
       <circle cx="3" cy="12.4" r="1.8" fill="none" stroke="currentColor" strokeWidth="1.4" />
       <circle cx="13" cy="12.4" r="1.8" fill="none" stroke="currentColor" strokeWidth="1.4" />
       <path d="M7.2 4.2 3.6 10.9M8.8 4.2l3.6 6.7M4.8 12.4h6.4" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+/** 网络：两层方框（VPC / 子网）+ 一个对外出口点。 */
+function IconNetwork() {
+  return (
+    <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+      <rect x="1.4" y="1.6" width="9.6" height="6.4" rx="1.4" fill="none" stroke="currentColor" strokeWidth="1.4" />
+      <rect x="3.6" y="4" width="9.6" height="6.4" rx="1.4" fill="none" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M13.2 10.4v3.2M11.8 12h2.8" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
     </svg>
   )
 }
