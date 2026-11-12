@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { createAtlasClient } from '@dayu-sec/wist-atlas-graph'
 import { TopologyCanvasView, useTopologyView } from '@dayu-sec/wist-atlas-graph/ui'
 import '@dayu-sec/wist-atlas-graph/styles.css'
@@ -13,7 +13,15 @@ import { useAppTheme } from '../theme'
  * （令牌校验只有一道门），画布、工具条、详情抽屉来自 `@dayu-sec/wist-atlas-graph`。
  * 好处：没有第二套顶栏/路由/主题，深浅色与数据场一致，Esc/搜索/缩放都在同一棵 React 树里。
  */
-export function TopologyPage() {
+export function TopologyPage({
+  networkId,
+  hostId,
+}: {
+  /** 从「网络资产」页跳过来时带的定位目标：网段（看这个子网里有哪些机器）。 */
+  networkId?: string
+  /** 或者直接定位一台主机。 */
+  hostId?: string
+} = {}) {
   const theme = useAppTheme()
 
   // 前缀与令牌由宿主注入：BFF 把 `/api/atlas/*` 转给 atlas，浏览器不直连 atlas。
@@ -42,6 +50,19 @@ export function TopologyPage() {
     // 自动选中会让同一张大图被拉两次（先总览、再焦点），而画布本来就是总览。
     autoSelectFirstHost: false,
   })
+
+  // 带参进来就定位一次：之后用户自己在画布里点来点去，不该被 query 拽回去。
+  const applied = useRef(false)
+  useEffect(() => {
+    if (applied.current) return
+    if (networkId) {
+      applied.current = true
+      view.openNetwork(networkId)
+    } else if (hostId) {
+      applied.current = true
+      view.setHostId(hostId)
+    }
+  }, [networkId, hostId, view])
 
   return (
     <div className="topology-page">

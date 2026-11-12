@@ -268,11 +268,25 @@ export default function App() {
             </div>
           }
         >
-          <TopologyPage />
+          <TopologyPage
+            networkId={route.query.get('network') ?? undefined}
+            hostId={route.query.get('host') ?? undefined}
+          />
         </Suspense>
       ) : null}
 
-      {route.tab === 'network' ? <NetworkPage /> : null}
+      {route.tab === 'network' ? (
+        <NetworkPage
+          // 从清单跳到拓扑：带上网段或主机，落页即定位，不用再让人去粘贴 UUID。
+          onOpenTopology={({ networkId, hostId }) => {
+            const params = new URLSearchParams()
+            if (networkId) params.set('network', networkId)
+            if (hostId) params.set('host', hostId)
+            const suffix = params.toString()
+            navigate(suffix ? `/topology?${suffix}` : '/topology')
+          }}
+        />
+      ) : null}
 
       {route.tab === 'health' ? (
         <HealthPage
