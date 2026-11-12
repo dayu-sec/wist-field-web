@@ -3,6 +3,7 @@ import { createAtlasClient } from '@dayu-sec/wist-atlas-graph'
 import { TopologyCanvasView, useTopologyView } from '@dayu-sec/wist-atlas-graph/ui'
 import '@dayu-sec/wist-atlas-graph/styles.css'
 import { getToken } from '../auth'
+import { withTenant } from '../tenant'
 import { useAppTheme } from '../theme'
 
 /**
@@ -16,6 +17,10 @@ export function TopologyPage() {
   const theme = useAppTheme()
 
   // 前缀与令牌由宿主注入：BFF 把 `/api/atlas/*` 转给 atlas，浏览器不直连 atlas。
+  //
+  // `fetchImpl` 是为了补客户：atlas 的画布组件走**自己的** fetch，不经过 `api.ts` 的
+  // `request()`，所以 `withTenant` 在这里得再包一层 —— 否则多客户站点上 BFF 收到的是
+  // “没选客户”，直接 400；单客户站点不影响。
   const client = useMemo(
     () =>
       createAtlasClient({
@@ -26,6 +31,7 @@ export function TopologyPage() {
           if (token) headers.Authorization = `Bearer ${token}`
           return headers
         },
+        fetchImpl: (input, init) => fetch(withTenant(String(input)), init),
       }),
     [],
   )
