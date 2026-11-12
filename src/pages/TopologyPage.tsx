@@ -36,7 +36,12 @@ export function TopologyPage() {
     [],
   )
 
-  const view = useTopologyView({ client })
+  const view = useTopologyView({
+    client,
+    // 这个页面首屏就是「资产总览」（主机卡 + 共享网段）：不要自动选中第一台主机。
+    // 自动选中会让同一张大图被拉两次（先总览、再焦点），而画布本来就是总览。
+    autoSelectFirstHost: false,
+  })
 
   return (
     <div className="topology-page">
