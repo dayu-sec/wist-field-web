@@ -122,19 +122,43 @@ function compareDomains(a: NetworkDomainItem, b: NetworkDomainItem): number {
   return a.name.localeCompare(b.name)
 }
 
+type NetworkSection = 'vpc' | 'subnets' | 'ips' | 'idle'
+
+const SECTIONS: { id: NetworkSection; label: string }[] = [
+  { id: 'vpc', label: 'VPC' },
+  { id: 'subnets', label: '子网' },
+  { id: 'ips', label: '公网 IP' },
+  { id: 'idle', label: '闲置地址' },
+]
+
+function normalizeSection(raw: string | undefined): NetworkSection {
+  const hit = SECTIONS.find((item) => item.id === raw)
+  return hit ? hit.id : 'vpc'
+}
+
 /**
- * 网络资产：VPC → 子网，以及弹性公网 IP。
+ * 网络资产：VPC / 子网 / 公网 IP / 闲置地址，四个 tab 各看一类。
  *
  * 为什么单独一页而不是塞进「资产拓扑」：画布只能画「被主机用到的网段」，而
  * **地址空间的边界**（VPC 的 CIDR、空子网）和**暴露面**（公网 IP 绑在哪）是
  * 列表才能回答的问题 —— 画布上再加一层节点只会把主机挤小。
  *
- * 这一页刻意不是「把表倒出来」：
- * - **按有用性排序**，空 VPC 折叠：云上自带的 `Default-VPC` 会占掉大半屏；
- * - 每个数字都带「所以呢」（子网 9 / 256、17 个空子网、0 个闲置地址）；
- * - 能从清单**跳到拓扑**：看到可疑的子网/主机，下一步就是去看它连着谁。
+ * 为什么是 tab 而不是四张统计卡：这四类不是同一张表的四种计数，列义各不相同
+ * （VPC 看地址规划、子网看填得多满、公网 IP 看绑给谁、闲置地址看有没有白付钱）。
+ * 统计卡只能说「有 20 个子网」，tab 才能顺手把「哪几个是空的」摊开。
+ *
+ * tab 走路由（`#/network/subnets`）：刷新 / 分享都能回到同一屏，和「接口可用性」一致。
  */
-export function NetworkPage({ onOpenTopology }: { onOpenTopology: (target: { networkId?: string; hostId?: string }) => void }) {
+export function NetworkPage({
+  section,
+  onSection,
+  onOpenTopology,
+}: {
+  /** 当前 tab 来自路由的路径段（`#/network/<section>`）。 */
+  section?: string
+  onSection: (section: NetworkSection) => void
+  onOpenTopology: (target: { networkId?: string; hostId?: string }) => void
+}) {
   const [domains, setDomains] = useState<NetworkDomainItem[] | null>(null)
   const [ips, setIps] = useState<ElasticIpItem[] | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -169,8 +193,18 @@ export function NetworkPage({ onOpenTopology }: { onOpenTopology: (target: { net
     const sorted = [...(domains ?? [])].sort(compareDomains)
     const used = sorted.filter(isUsedDomain)
     const unused = sorted.filter((domain) => !isUsedDomain(domain))
-    const segments = sorted.flatMap((domain) => domain.segments)
-    const emptySegments = segments.filter((segment) => segment.hostCount === 0)
+    const segments = sorted.flatMap((domain) =>
+      domain.segments.map((segment) => ({ segment, domainName: domain.name })),
+    )
+    // 子网 tab 的排序：空的在前（占着 CIDR 没人用才是要处理的），同一档里用得多的在前。
+    const sortedSegments = [...segments].sort((a, b) => {
+      const byEmpty =
+        Number(b.segment.hostCount === 0) - Number(a.segment.hostCount === 0)
+      if (byEmpty !== 0) return byEmpty
+      const byHosts = b.segment.hostCount - a.segment.hostCount
+      if (byHosts !== 0) return byHosts
+      return (a.segment.cidr ?? '').localeCompare(b.segment.cidr ?? '')
+    })
     const accounts = [...new Set(sorted.map((domain) => domain.cloudAccount).filter(Boolean))]
     const bindingKinds = new Map<string, number>()
     for (const ip of ips ?? []) {
@@ -180,8 +214,9 @@ export function NetworkPage({ onOpenTopology }: { onOpenTopology: (target: { net
     return {
       used,
       unused,
+      segments: sortedSegments,
       segmentCount: segments.length,
-      emptySegments: emptySegments.length,
+      emptySegments: segments.filter(({ segment }) => segment.hostCount === 0).length,
       accounts,
       bindingKinds,
       idleCount: (ips ?? []).filter(isIdle).length,
@@ -191,6 +226,32 @@ export function NetworkPage({ onOpenTopology }: { onOpenTopology: (target: { net
 
   const boundByHost = model.bindingKinds.get('host') ?? 0
   const boundByNat = model.bindingKinds.get('nat_gateway') ?? 0
+  const active = normalizeSection(section)
+  // 闲置是「只有云侧明确说未绑定」的那批；状态未知的留在公网 IP 里，不在这里报账。
+  const idleIps = (ips ?? []).filter(isIdle)
+
+  // tab 的副标题兼一眼摘要：原来四张统计卡上的数字挪到这里，跟着 tab 一起出现。
+  const hints: Record<NetworkSection, string> = {
+    vpc: domains
+      ? `${domains.length} 个 · ${model.used.length} 个有主机 / ${model.unused.length} 个空壳`
+      : '按主机数排序 · 空 VPC 折叠',
+    subnets: domains
+      ? `${model.segmentCount} 个 · ${model.emptySegments} 个空子网 · ${model.hostTotal} 台机`
+      : '空子网占着 CIDR 却没人用',
+    ips: ips
+      ? `${ips.length} 个 · ${boundByHost} 台主机入口 / ${boundByNat} 个 NAT`
+      : '绑在主机上的就是对外入口',
+    idle: ips
+      ? model.idleCount === 0
+        ? '0 个 · 没有白付的地址'
+        : `${model.idleCount} 个 · 每小时都在计费`
+      : '未绑定的地址按小时计费',
+  }
+
+  const accounts =
+    model.accounts.length > 0 ? (
+      <span className="muted">账号 {model.accounts.map(accountShort).join(' / ')}</span>
+    ) : undefined
 
   return (
     <PageShell
@@ -199,7 +260,7 @@ export function NetworkPage({ onOpenTopology }: { onOpenTopology: (target: { net
         <>
           VPC / 子网与弹性公网 IP，来自云账号采集（wist-atlas）。{' '}
           <span className="muted">
-            空子网是占着不用的 CIDR，闲置公网 IP 照样按小时计费 —— 这两类排在最前。
+            空子网是占着不用的 CIDR，闲置公网 IP 照样按小时计费 —— 这两类各自一个 tab。
           </span>
         </>
       }
@@ -217,226 +278,203 @@ export function NetworkPage({ onOpenTopology }: { onOpenTopology: (target: { net
       {error ? <ErrorBanner>{error}</ErrorBanner> : null}
 
       <Block wide>
-        <div className="metrics">
-          <Stat
-            label="VPC"
-            value={domains?.length ?? '—'}
-            hint={
-              domains
-                ? `${model.used.length} 个有主机 · ${model.unused.length} 个空壳`
-                : undefined
-            }
-          />
-          <Stat
-            label="子网"
-            value={domains ? model.segmentCount : '—'}
-            hint={
-              domains ? `${model.emptySegments} 个没有主机，${model.hostTotal} 台机分布在其余子网` : undefined
-            }
-            tone={model.emptySegments > 0 ? 'amber' : undefined}
-          />
-          <Stat
-            label="公网 IP"
-            value={ips?.length ?? '—'}
-            hint={ips ? `${boundByHost} 台主机入口 · ${boundByNat} 个 NAT 网关` : undefined}
-          />
-          <Stat
-            label="闲置地址"
-            value={ips ? model.idleCount : '—'}
-            hint={ips ? (model.idleCount === 0 ? '没有白付的地址' : '每小时都在计费') : undefined}
-            tone={model.idleCount > 0 ? 'amber' : 'green'}
-          />
-        </div>
-      </Block>
+        <div className="stack">
+          <div className="tabs" role="tablist" aria-label="网络资产视图">
+            {SECTIONS.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                role="tab"
+                aria-selected={active === item.id}
+                className={`tabs__item${active === item.id ? ' tabs__item--active' : ''}`}
+                onClick={() => onSection(item.id)}
+              >
+                <span className="tabs__label">{item.label}</span>
+                <span className="tabs__hint">{hints[item.id]}</span>
+              </button>
+            ))}
+          </div>
 
-      <Block wide>
-        <Card
-          title="地址空间"
-          subtitle={
-            domains && domains.length > 0
-              ? `按主机数排序${model.unused.length > 0 ? `；${model.unused.length} 个 Default-VPC 是云上自带的空壳，折叠在最后` : ''}。区域暂未采集 —— 同名 VPC 只能靠 CIDR 区分。`
-              : '子网按所属 VPC 分组'
-          }
-          aside={
-            model.accounts.length > 0 ? (
-              <span className="muted">账号 {model.accounts.map(accountShort).join(' / ')}</span>
-            ) : undefined
-          }
-        >
-          {domains === null ? (
-            <p className="muted">{loading ? '正在读取…' : '尚未读取'}</p>
-          ) : domains.length === 0 ? (
-            <Empty
-              title="还没有采集到 VPC"
-              hint="云账号资产由 wist-harvest 采集后写入 atlas；确认采集任务在跑。"
-            />
-          ) : (
-            <>
-              <div className="table-wrap">
-                <table className="table">
-                  <thead>
-                    <tr>
-                      <th>VPC / 子网</th>
-                      <th>CIDR</th>
-                      <th>地址数</th>
-                      <th>主机 / 容量</th>
-                      <th>云侧 id</th>
-                      <th />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {model.used.map((domain) => (
-                      <DomainRows
-                        key={domain.id}
-                        domain={domain}
-                        onOpenTopology={onOpenTopology}
-                      />
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+          <div
+            className="stack"
+            role="tabpanel"
+            aria-label={SECTIONS.find((item) => item.id === active)?.label}
+          >
+            {active === 'vpc' ? (
+              <Card
+                title="VPC"
+                subtitle={
+                  domains && domains.length > 0
+                    ? `按主机数排序${model.unused.length > 0 ? `；${model.unused.length} 个空 VPC（云上自带的 Default-VPC）折叠在最后` : ''}。区域暂未采集 —— 同名 VPC 只能靠 CIDR 区分。`
+                    : '地址规划的顶格：每个 VPC 一段 CIDR'
+                }
+                aside={accounts}
+              >
+                {domains === null ? (
+                  <p className="muted">{loading ? '正在读取…' : '尚未读取'}</p>
+                ) : domains.length === 0 ? (
+                  <Empty
+                    title="还没有采集到 VPC"
+                    hint="云账号资产由 wist-harvest 采集后写入 atlas；确认采集任务在跑。"
+                  />
+                ) : (
+                  <>
+                    <div className="table-wrap">
+                      <table className="table">
+                        <thead>
+                          <tr>
+                            <th>VPC</th>
+                            <th>CIDR</th>
+                            <th>地址数</th>
+                            <th>子网</th>
+                            <th>主机</th>
+                            <th>云侧 id</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {model.used.map((domain) => (
+                            <DomainRow key={domain.id} domain={domain} />
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
 
-              {model.unused.length > 0 ? (
-                <details className="details" style={{ marginTop: 12 }}>
-                  <summary className="details__summary">
-                    还有 {model.unused.length} 个空 VPC（
-                    {model.unused.reduce((sum, domain) => sum + domain.segments.length, 0)} 个子网，全部没有主机）
-                  </summary>
-                  <div className="details__body">
+                    {model.unused.length > 0 ? (
+                      <details className="details" style={{ marginTop: 12 }}>
+                        <summary className="details__summary">
+                          还有 {model.unused.length} 个空 VPC（
+                          {model.unused.reduce((sum, domain) => sum + domain.segments.length, 0)}{' '}
+                          个子网，全部没有主机）
+                        </summary>
+                        <div className="details__body">
+                          <table className="table">
+                            <tbody>
+                              {model.unused.map((domain) => (
+                                <DomainRow key={domain.id} domain={domain} />
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </details>
+                    ) : null}
+                  </>
+                )}
+              </Card>
+            ) : null}
+
+            {active === 'subnets' ? (
+              <Card
+                title="子网"
+                subtitle="空子网排最前：占着一段 CIDR 却没有主机。容量按 CIDR 里的地址总数算，不扣网络地址和广播地址。"
+                aside={accounts}
+              >
+                {domains === null ? (
+                  <p className="muted">{loading ? '正在读取…' : '尚未读取'}</p>
+                ) : model.segments.length === 0 ? (
+                  <Empty
+                    title="还没有采集到子网"
+                    hint="确认云账号采集覆盖了 VPC / 子网类型。"
+                  />
+                ) : (
+                  <div className="table-wrap">
                     <table className="table">
+                      <thead>
+                        <tr>
+                          <th>子网</th>
+                          <th>所属 VPC</th>
+                          <th>CIDR</th>
+                          <th>地址数</th>
+                          <th>主机 / 容量</th>
+                          <th>云侧 id</th>
+                          <th />
+                        </tr>
+                      </thead>
                       <tbody>
-                        {model.unused.map((domain) => (
-                          <DomainRows
-                            key={domain.id}
-                            domain={domain}
+                        {model.segments.map(({ segment, domainName }) => (
+                          <SegmentRow
+                            key={segment.id}
+                            segment={segment}
+                            domainName={domainName}
                             onOpenTopology={onOpenTopology}
                           />
                         ))}
                       </tbody>
                     </table>
                   </div>
-                </details>
-              ) : null}
-            </>
-          )}
-        </Card>
-      </Block>
+                )}
+              </Card>
+            ) : null}
 
-      <Block wide>
-        <Card
-          title="弹性公网 IP"
-          subtitle="闲置的排最前：云上释放之前它每小时都在计费。绑在主机上的地址就是这台机对外的入口。"
-        >
-          {ips === null ? (
-            <p className="muted">{loading ? '正在读取…' : '尚未读取'}</p>
-          ) : ips.length === 0 ? (
-            <Empty title="还没有采集到公网 IP" hint="确认云账号采集覆盖了 EIP 类型。" />
-          ) : (
-            <div className="table-wrap">
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>地址</th>
-                    <th>状态</th>
-                    <th>绑定目标</th>
-                    <th>计费 / 带宽</th>
-                    <th>地址 id</th>
-                    <th />
-                  </tr>
-                </thead>
-                <tbody>
-                  {[...ips]
-                    .sort((a, b) => Number(isIdle(b)) - Number(isIdle(a)))
-                    .map((ip) => (
-                      <tr key={ip.id}>
-                        <td>
-                          <Mono>{ip.address}</Mono>
-                        </td>
-                        <td>
-                          <Badge tone={statusTone(ip)}>{statusLabel(ip)}</Badge>
-                        </td>
-                        <td>
-                          {bindingText(ip)}
-                          {ip.boundTargetKind && !ip.boundHostId ? (
-                            <div className="muted">未归集到主机，仅保留云侧 id</div>
-                          ) : null}
-                        </td>
-                        <td>
-                          {[
-                            ip.chargeType ? (CHARGE_TYPES[ip.chargeType] ?? ip.chargeType) : null,
-                            ip.bandwidthMbps === null ? null : `${ip.bandwidthMbps} Mbps`,
-                          ]
-                            .filter(Boolean)
-                            .join(' · ') || '—'}
-                        </td>
-                        <td>
-                          <Mono>{ip.externalRef}</Mono>
-                        </td>
-                        <td>
-                          {ip.boundHostId ? (
-                            <button
-                              type="button"
-                              className="button button--ghost button--sm"
-                              onClick={() => onOpenTopology({ hostId: ip.boundHostId ?? undefined })}
-                            >
-                              看主机
-                            </button>
-                          ) : null}
-                        </td>
-                      </tr>
-                    ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </Card>
+            {active === 'ips' ? (
+              <Card
+                title="弹性公网 IP"
+                subtitle="闲置的排最前：云上释放之前它每小时都在计费。绑在主机上的地址就是这台机对外的入口。"
+              >
+                <IpTable ips={ips} loading={loading} onOpenTopology={onOpenTopology} />
+              </Card>
+            ) : null}
+
+            {active === 'idle' ? (
+              <Card
+                title="闲置地址"
+                subtitle="只列云侧状态明确是「未绑定」的地址。状态未知的仍在「公网 IP」里，不计入计费提醒 —— 猜错会让人去删一个还在用的地址。"
+                aside={
+                  ips ? (
+                    <Badge tone={model.idleCount > 0 ? 'amber' : 'green'}>
+                      {model.idleCount} 个
+                    </Badge>
+                  ) : undefined
+                }
+              >
+                <IpTable
+                  ips={ips === null ? null : idleIps}
+                  loading={loading}
+                  onOpenTopology={onOpenTopology}
+                  emptyTitle="没有闲置的公网 IP"
+                  emptyHint="云上每个未绑定的地址都按小时计费；这里为空说明没有白付的地址。"
+                />
+              </Card>
+            ) : null}
+          </div>
+        </div>
       </Block>
     </PageShell>
   )
 }
 
-/**
- * 一个 VPC 一行摘要 + 每个子网一行（缩进，不嵌表格）。
- *
- * 两类行共用一套列义：名称 / CIDR / 容量 / 用掉多少 / 云侧 id。
- * 混着给两套列义会让人以为第 4 列既是「主机数」又是「子网 id」。
- */
-function DomainRows({
-  domain,
-  onOpenTopology,
-}: {
-  domain: NetworkDomainItem
-  onOpenTopology: (target: { networkId?: string; hostId?: string }) => void
-}) {
+/** 一个 VPC 一行：地址规划看的就是这一格 —— 一段 CIDR、多少个容器层子网、多少台机。 */
+function DomainRow({ domain }: { domain: NetworkDomainItem }) {
   return (
-    <>
-      <tr>
-        <td>
-          <strong>{domain.name}</strong>
-          <div className="muted">{domain.segments.length} 个子网</div>
-        </td>
-        <td>
-          <Mono>{domain.cidr ?? '—'}</Mono>
-        </td>
-        <td>{formatAddresses(cidrAddresses(domain.cidr))}</td>
-        <td>{domainHosts(domain)} 台机</td>
-        <td>
-          <Mono>{domain.externalRef ?? '—'}</Mono>
-        </td>
-        <td />
-      </tr>
-      {domain.segments.map((segment) => (
-        <SegmentRow key={segment.id} segment={segment} onOpenTopology={onOpenTopology} />
-      ))}
-    </>
+    <tr>
+      <td>
+        <strong>{domain.name}</strong>
+      </td>
+      <td>
+        <Mono>{domain.cidr ?? '—'}</Mono>
+      </td>
+      <td>{formatAddresses(cidrAddresses(domain.cidr))}</td>
+      <td>{domain.segments.length} 个</td>
+      <td>{domainHosts(domain)} 台机</td>
+      <td>
+        <Mono>{domain.externalRef ?? '—'}</Mono>
+      </td>
+    </tr>
   )
 }
 
+/**
+ * 一个子网一行（子网 tab）。
+ *
+ * 子网 tab 是扁平的，所以在行里带「所属 VPC」：不分组也看得出它属于谁，
+ * 省掉一层可折叠的嵌套表格（那会让空子网更难被扫到）。
+ */
 function SegmentRow({
   segment,
+  domainName,
   onOpenTopology,
 }: {
   segment: NetworkSegmentItem
+  domainName: string
   onOpenTopology: (target: { networkId?: string; hostId?: string }) => void
 }) {
   const capacity = cidrAddresses(segment.cidr)
@@ -445,8 +483,9 @@ function SegmentRow({
   return (
     <tr>
       <td>
-        <span className="muted">└&nbsp;{segment.name}</span>
+        <strong>{segment.name}</strong>
       </td>
+      <td className="muted">{domainName}</td>
       <td>
         <Mono>{segment.cidr ?? '—'}</Mono>
       </td>
@@ -499,24 +538,79 @@ function SegmentRow({
   )
 }
 
-function Stat({
-  label,
-  value,
-  hint,
-  tone,
+/** 公网 IP 表：两个 tab（全部 / 闲置）共用一套列义，只是喂进来的行不同。 */
+function IpTable({
+  ips,
+  loading,
+  onOpenTopology,
+  emptyTitle = '还没有采集到公网 IP',
+  emptyHint = '确认云账号采集覆盖了 EIP 类型。',
 }: {
-  label: string
-  value: number | string
-  hint?: string
-  tone?: BadgeTone
+  ips: ElasticIpItem[] | null
+  loading: boolean
+  onOpenTopology: (target: { networkId?: string; hostId?: string }) => void
+  emptyTitle?: string
+  emptyHint?: string
 }) {
-  // 只有「要处理」的才上色：好状态给绿字在深色主题下反而像在报警。
-  const toneClass = tone === 'amber' ? ' metric__value--warn' : ''
+  if (ips === null) return <p className="muted">{loading ? '正在读取…' : '尚未读取'}</p>
+  if (ips.length === 0) return <Empty title={emptyTitle} hint={emptyHint} />
+
   return (
-    <div className="metric">
-      <span className="metric__label">{label}</span>
-      <span className={`metric__value${toneClass}`}>{value}</span>
-      {hint ? <span className="metric__hint">{hint}</span> : null}
+    <div className="table-wrap">
+      <table className="table">
+        <thead>
+          <tr>
+            <th>地址</th>
+            <th>状态</th>
+            <th>绑定目标</th>
+            <th>计费 / 带宽</th>
+            <th>地址 id</th>
+            <th />
+          </tr>
+        </thead>
+        <tbody>
+          {[...ips]
+            .sort((a, b) => Number(isIdle(b)) - Number(isIdle(a)))
+            .map((ip) => (
+              <tr key={ip.id}>
+                <td>
+                  <Mono>{ip.address}</Mono>
+                </td>
+                <td>
+                  <Badge tone={statusTone(ip)}>{statusLabel(ip)}</Badge>
+                </td>
+                <td>
+                  {bindingText(ip)}
+                  {ip.boundTargetKind && !ip.boundHostId ? (
+                    <div className="muted">未归集到主机，仅保留云侧 id</div>
+                  ) : null}
+                </td>
+                <td>
+                  {[
+                    ip.chargeType ? (CHARGE_TYPES[ip.chargeType] ?? ip.chargeType) : null,
+                    ip.bandwidthMbps === null ? null : `${ip.bandwidthMbps} Mbps`,
+                  ]
+                    .filter(Boolean)
+                    .join(' · ') || '—'}
+                </td>
+                <td>
+                  <Mono>{ip.externalRef}</Mono>
+                </td>
+                <td>
+                  {ip.boundHostId ? (
+                    <button
+                      type="button"
+                      className="button button--ghost button--sm"
+                      onClick={() => onOpenTopology({ hostId: ip.boundHostId ?? undefined })}
+                    >
+                      看主机
+                    </button>
+                  ) : null}
+                </td>
+              </tr>
+            ))}
+        </tbody>
+      </table>
     </div>
   )
 }

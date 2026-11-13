@@ -277,6 +277,11 @@ export default function App() {
 
       {route.tab === 'network' ? (
         <NetworkPage
+          // tab 走路由：`#/network/subnets` 刷新 / 分享都回到同一屏；VPC 是默认视图，留在 `#/network`。
+          section={route.segments[0]}
+          onSection={(section) =>
+            navigate(section === 'vpc' ? '/network' : `/network/${section}`)
+          }
           // 从清单跳到拓扑：带上网段或主机，落页即定位，不用再让人去粘贴 UUID。
           onOpenTopology={({ networkId, hostId }) => {
             const params = new URLSearchParams()

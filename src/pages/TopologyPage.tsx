@@ -51,6 +51,10 @@ export function TopologyPage({
     autoSelectFirstHost: false,
   })
 
+  // 下钻到网段 / 服务视图时，这台选择器无处可去（它只能选主机）：置灰并说明怎么退。
+  const lastLevel = view.path[view.path.length - 1]
+  const hostPickerLocked = Boolean(lastLevel && lastLevel.kind !== 'host')
+
   // 带参进来就定位一次：之后用户自己在画布里点来点去，不该被 query 拽回去。
   const applied = useRef(false)
   useEffect(() => {
@@ -65,46 +69,44 @@ export function TopologyPage({
   }, [networkId, hostId, view])
 
   return (
+    // 不再用 PageShell：顶栏面包屑已经写着「计算区 / 资产拓扑」，标题再来一遍是重复，
+    // 而且那两行要吃掉一百 px 高度 —— 画布页面把这块全让给图。
     <div className="topology-page">
-      <header className="topology-bar">
-        <div className="topology-bar__title">
-          <h1 className="page-title">资产拓扑</h1>
-          <p className="page-summary">
-            主机 / 服务 / 进程关系由 wist-atlas 提供；这里是同一张画布的组件化接入，不是 iframe。
-          </p>
-        </div>
+      <div className="topology-actions">
+        <select
+          value={view.hostId}
+          onChange={(event) => view.setHostId(event.target.value)}
+          disabled={view.hosts.length === 0 || hostPickerLocked}
+          aria-label="切换主机"
+          title={
+            hostPickerLocked
+              ? '当前在网段 / 服务视图里：点画布左上角的面包屑返回后再切主机'
+              : '只看一台主机，或回到全部主机总览'
+          }
+        >
+          <option value="">全部主机（总览）</option>
+          {view.hosts.map((host) => (
+            <option key={host.id} value={host.id}>
+              {host.hostName}
+              {host.stale ? '（已退役）' : ''}
+            </option>
+          ))}
+        </select>
 
-        <div className="topology-bar__actions">
-          <label className="topology-field">
-            <span className="field__label">主机</span>
-            <select
-              value={view.hostId}
-              onChange={(event) => view.setHostId(event.target.value)}
-              disabled={view.hosts.length === 0}
-              aria-label="切换主机"
-            >
-              <option value="">全部主机（总览）</option>
-              {view.hosts.map((host) => (
-                <option key={host.id} value={host.id}>
-                  {host.hostName}
-                  {host.stale ? '（已退役）' : ''}
-                </option>
-              ))}
-            </select>
-          </label>
+        <button
+          type="button"
+          className="button button--ghost button--sm"
+          onClick={view.refresh}
+          disabled={view.loading}
+        >
+          {view.loading ? '同步中…' : '刷新'}
+        </button>
+      </div>
 
-          <button
-            type="button"
-            className="button button--ghost button--sm"
-            onClick={view.refresh}
-            disabled={view.loading}
-          >
-            {view.loading ? '同步中…' : '刷新'}
-          </button>
-        </div>
-      </header>
-
-      <TopologyCanvasView view={view} theme={theme} />
+      {/* 画布要铺满剩下的高度，所以由 `.topology-page` 把 header 之外的空间全给它。 */}
+      <div className="topology-stage">
+        <TopologyCanvasView view={view} theme={theme} />
+      </div>
     </div>
   )
 }

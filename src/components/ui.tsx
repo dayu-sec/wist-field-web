@@ -10,15 +10,18 @@ export function PageShell({
   title,
   summary,
   actions,
+  flush,
   children,
 }: {
   title: string
   summary: ReactNode
   actions?: ReactNode
+  /** 正文要铺满剩余高度（画布类页面）：去掉底部留白与 header 之下的间距。 */
+  flush?: boolean
   children: ReactNode
 }) {
   return (
-    <div className="page-shell">
+    <div className={flush ? 'page-shell page-shell--flush' : 'page-shell'}>
       <header className="page-header">
         <div className="page-header__row">
           <div>
@@ -44,15 +47,27 @@ export function Card({
   aside,
   children,
   className,
+  id,
+  role,
+  labelledBy,
 }: {
   title?: ReactNode
   subtitle?: ReactNode
   aside?: ReactNode
   children: ReactNode
   className?: string
+  /** tab 面板用它挂 `role="tabpanel"` 与 `aria-labelledby`（按钮上的 `aria-controls` 指过来）。 */
+  id?: string
+  role?: string
+  labelledBy?: string
 }) {
   return (
-    <section className={className ? `card ${className}` : 'card'}>
+    <section
+      id={id}
+      role={role}
+      aria-labelledby={labelledBy}
+      className={className ? `card ${className}` : 'card'}
+    >
       {title || subtitle || aside ? (
         <header className="card__header">
           <div>
