@@ -18,6 +18,8 @@ export interface SourceState {
 export interface ConsoleHealth {
   status: string
   version?: string
+  /** 站点栈（`wist-field-stack`）的版本号：由编排注入，手动跑时为 undefined。 */
+  stack_version?: string | null
   sources: Record<string, SourceState>
   /** 逐条接口探活：BFF 自己看到的那一面。 */
   interfaces?: InterfaceState[]
@@ -465,6 +467,34 @@ export interface MiddlewareOverview {
 
 export function getMetricsMiddleware(): Promise<MiddlewareOverview> {
   return request<MiddlewareOverview>('/api/metrics/middleware')
+}
+
+/**
+ * 一条数据面通道在窗口内**收到了多少**。
+ *
+ * 三条通道的单元本来就不一样（证据按条、Atlas 按投递批次、指标按样本），
+ * 所以 `unit` 跟着数据走，页面不做换算。
+ * `received === null` 表示这个通道没给计数（原因在 `note` 里）。
+ */
+export interface IngestChannel {
+  id: 'evidence' | 'atlas' | 'metrics'
+  label: string
+  unit: string
+  received: number | null
+  /** 最后一次接收时间（unix 毫秒）。 */
+  last_at_ms: number | null
+  note: string | null
+}
+
+export interface IngestStats {
+  window_seconds: number
+  checked_at_ms: number
+  channels: IngestChannel[]
+}
+
+/** `window_seconds` 只影响窗口内那个计数，不影响「最后一次」。 */
+export function getIngestStats(windowSeconds: number): Promise<IngestStats> {
+  return request<IngestStats>(`/api/ingest/stats?window_seconds=${windowSeconds}`)
 }
 
 /**

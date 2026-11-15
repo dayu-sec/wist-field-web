@@ -8,6 +8,12 @@ export function formatBytes(size: number | null | undefined): string {
   return `${(size / (1024 * 1024)).toFixed(1)} MiB`
 }
 
+/** 计数（千分位）：`3,661,778`。样本量能到百万级，不分组读不出来。 */
+export function formatCount(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '—'
+  return new Intl.NumberFormat('zh-CN').format(Math.round(value))
+}
+
 /** 绝对时刻（本地时区，24h）。 */
 export function formatDateTime(value: string | null | undefined): string {
   if (!value) return '—'
