@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react'
+import type { ConsoleHealth } from '../api'
 import { formatRelativeTime } from '../format'
 import { toggleAppTheme, useAppTheme } from '../theme'
 
@@ -19,6 +20,12 @@ export type Tab =
 function versionLabel(): string {
   const version = __APP_VERSION__.replace(/^v/, '')
   return version === '' || version === 'dev' ? 'dev' : `v${version}`
+}
+
+/** 后端报的版本号：去掉前缀 v，空 / dev 一律显示「—」（不编一个假版本）。 */
+function backendVersion(value?: string | null): string {
+  const version = (value ?? '').trim().replace(/^v/, '')
+  return version === '' || version === 'dev' ? '—' : `v${version}`
 }
 
 const TAB_LABELS: Record<Tab, string> = {
@@ -183,6 +190,8 @@ interface ShellProps {
   tenant?: string | null
   /** 切换客户：清掉选择，回到选客户页。 */
   onSwitchTenant?: () => void
+  /** `/api/health`：左下角显示 BFF 与站点栈的版本（拿不到就显示「—」）。 */
+  health?: ConsoleHealth | null
   children: ReactNode
 }
 
@@ -197,6 +206,7 @@ export function Shell({
   onSignOut,
   tenant,
   onSwitchTenant,
+  health,
   children,
 }: ShellProps) {
   const theme = useAppTheme()
@@ -243,8 +253,11 @@ export function Shell({
         </nav>
 
         <footer className="sidebar-footer">
-          <span className="sidebar-version">{versionLabel()}</span>
-          <span className="sidebar-note">wist-field-web · 计算区</span>
+          <span className="sidebar-version">wist-field-web {versionLabel()}</span>
+          <span className="sidebar-note">wist-field-api {backendVersion(health?.version)}</span>
+          <span className="sidebar-note">
+            wist-field-stack {backendVersion(health?.stack_version)}
+          </span>
         </footer>
       </aside>
 

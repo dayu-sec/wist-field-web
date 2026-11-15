@@ -1,5 +1,13 @@
 # CHANGELOG
 
+## 0.2.13 · 2026-11-15
+
+- **左下角同时显示三层版本**：`wist-field-web`（页面自己）、`wist-field-api`（BFF 自报，
+  `/api/health.version`）、`wist-field-stack`（站点栈，`/api/health.stack_version`，由编排以
+  `WIST_FIELD_STACK_VERSION` 注入）。拿不到就显示「—」，不编一个假版本 ——
+  现场一眼能看出「页面 / 接口 / 栈」到底跑的是哪一组，不用再进容器 `docker inspect`。
+  这一条原本被写进了 0.2.10 段（那一版已发布，补进去读者看不到），这里搬到正确的位置。
+
 ## 0.2.12 · 2026-11-15
 
 - **概览页新增「数据进来没有」**：三条数据面通道（证据 / Atlas / 运行指标）各一行，
@@ -86,10 +94,6 @@
   配套后端 `wist-atlas` 0.6.0：多主机总览不再返回进程树（2.8 MB → ~21 KB）。
 - nginx 对 `/api` 的 JSON 开启 gzip（`gzip_proxied any`）：默认只压 nginx 自己的响应，
   反代过来的 JSON 会裸传。
-- **左下角同时显示三层版本**：`wist-field-web`（页面自己）、
-  `wist-field-api`（BFF 自报，`/api/health.version`）、`wist-field-stack`（站点栈，
-  `/api/health.stack_version`，由编排以 `WIST_FIELD_STACK_VERSION` 注入）。
-  拿不到就显示「—」，不编一个假版本；现场一眼能看出「页面/接口/栈」到底跑的是哪一组。
 
 ## 0.2.9 · 2026-11-11
 

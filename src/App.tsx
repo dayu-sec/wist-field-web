@@ -222,6 +222,7 @@ export default function App() {
       lastSyncedAt={lastSyncedAt}
       onRefresh={() => void refresh()}
       onSignOut={signOut}
+      health={health}
     >
       {route.tab === 'overview' ? (
         <OverviewPage health={health} error={healthError} onNavigate={(tab) => navigate(`/${tab}`)} />
