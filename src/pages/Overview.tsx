@@ -97,6 +97,23 @@ function ingestTone(channel: IngestChannel, now: number): IngestTone {
   return { badge: 'gray', bar: 'none', label: '无数据', width: 0 }
 }
 
+/**
+ * 「最后一次」那一列的文案。三件事要分清：还没拉到 / 这一路没给数 / 近期确实没有。
+ *
+ * 指标那一路只看得到自己租户的序列，说「未收到过」会把「标签没对上」误报成「没数据」，
+ * 所以它只说「1 小时内无样本」——这正是 BFF 真查过的范围。
+ */
+function lastWriteLabel(channel: IngestChannel, now: number, loaded: boolean): string {
+  if (!loaded) return '—'
+  const last = channel.last_at_ms
+  if (last === null) {
+    if (channel.id === 'metrics') return '1 小时内无样本'
+    return channel.total === null ? '未提供' : '未收到过'
+  }
+  if (now - last < 10_000) return '刚刚写入'
+  return `最后一次 ${formatRelativeTime(last, now)}`
+}
+
 export function OverviewPage({
   health,
   error,
@@ -222,13 +239,7 @@ export function OverviewPage({
                     <span className="ingest-card__foot">
                       <Badge tone={tone.badge}>{tone.label}</Badge>
                       <span className="ingest-card__last">
-                        {ingest === null
-                          ? '—'
-                          : last === null
-                            ? '未收到过'
-                            : now - last < 10_000
-                              ? '刚刚写入'
-                              : `最后一次 ${formatRelativeTime(last, now)}`}
+                        {lastWriteLabel(channel, now, ingest !== null)}
                       </span>
                     </span>
                     {note ? <span className="ingest-card__note">{note}</span> : null}
