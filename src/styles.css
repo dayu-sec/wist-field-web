@@ -823,14 +823,14 @@ a:focus-visible {
 }
 
 /* ── 接收情况（概览页）──────────────────────────────────────────────────
-   「接上」与「有数据在进」是两件事：探活看端点通不通，这一块看窗口内真收到了多少。
-   三条通道的单元不同（条 / 批 / 样本），所以计数列不强行对齐到同一个量纲，
-   只把「数值 / 单位 / 最后一次」三列固定住，扫一眼就知道谁断了。 */
+   「接上」与「有数据在进」是两件事：探活看端点通不通，这一块看真写进来多少。
+   一张通道一张卡，用的是中间件卡那套语言：条 = 新鲜度，分隔线下挂胶囊标签。
+   卡里只有两个数：累计写入条数、最后一次写入时间。 */
 .ingest {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 12px 16px;
+  gap: 10px;
+  padding: 12px 16px 14px;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--surface);
@@ -858,86 +858,99 @@ a:focus-visible {
   line-height: 1.45;
 }
 
-.ingest__head select {
-  width: auto;
-  min-height: 30px;
-  padding: 3px 8px;
-  font-size: 12px;
-}
-
-.ingest__rows {
-  display: flex;
-  flex-direction: column;
-}
-
-.ingest-row {
-  display: grid;
-  grid-template-columns: 92px minmax(0, 1fr) 96px 8px;
-  align-items: baseline;
-  gap: 10px;
-  padding: 8px 0;
-  border: 0;
-  border-top: 1px solid var(--border);
-  background: transparent;
-  text-align: left;
-  cursor: pointer;
-}
-
-.ingest-row:hover {
-  background: var(--overlay-soft);
-}
-
-.ingest-row__name {
-  color: var(--text-2);
-  font-size: 12.5px;
-}
-
-.ingest-row__count {
-  color: var(--text);
-  font-family: var(--font-mono);
-  font-size: 13px;
-  font-variant-numeric: tabular-nums;
-  text-align: right;
+/* 刷新节奏写在卡头上：秒级轮询的东西，要让人知道数字不是静止的。 */
+.ingest__pulse {
+  color: var(--text-4);
+  font-size: 11px;
   white-space: nowrap;
 }
 
-.ingest-row__unit {
+.ingest__cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(232px, 1fr));
+  gap: 10px;
+}
+
+.ingest-card {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 11px 13px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.ingest-card:hover {
+  border-color: var(--accent-border);
+  background: var(--surface);
+}
+
+.ingest-card:focus-visible {
+  outline: 2px solid var(--accent-border);
+  outline-offset: 1px;
+}
+
+.ingest-card__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.ingest-card__name {
+  color: var(--text-2);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.ingest-card__count {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 17px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.ingest-card__unit {
+  margin-left: 4px;
   color: var(--text-4);
   font-family: var(--font);
   font-size: 10.5px;
+  font-style: normal;
 }
 
-.ingest-row__last {
+/* 「累计」跟在大数字左边：不写出来，读者会以为这是「最近一批」。 */
+.ingest-card__caption {
+  margin-right: 6px;
   color: var(--text-4);
-  font-size: 11.5px;
-  text-align: right;
+  font-family: var(--font);
+  font-size: 10.5px;
+  font-style: normal;
+  font-weight: 400;
+}
+
+.ingest-card__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 7px;
+  border-top: 1px solid var(--border);
+}
+
+.ingest-card__last {
+  color: var(--text-4);
+  font-size: 11px;
   white-space: nowrap;
 }
 
-.ingest-row__dot {
-  align-self: center;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--text-4);
-}
-
-/* 绿只给「刚刚真的收到过」：事件型通道没数据是常态，不该染成告警色。 */
-.ingest-row__dot--live {
-  background: var(--ok);
-}
-
-.ingest-row__dot--slow {
-  background: var(--warn);
-}
-
-.ingest-row__dot--idle {
-  background: var(--border-strong);
-}
-
-/* 拿不到计数时把原因写在行下：这一栏的价值就是「缺什么说得出来」。 */
-.ingest-row__note {
-  grid-column: 1 / -1;
+/* 拿不到累计时把原因写在卡下：这一栏的价值就是「缺什么说得出来」。 */
+.ingest-card__note {
   color: var(--text-4);
   font-size: 10.5px;
   line-height: 1.45;
@@ -2673,6 +2686,11 @@ a:focus-visible {
   background: var(--border);
 }
 
+/* 概览的接收卡比指标卡高一档：它承载的是「这一路还在不在」，不是一行读数。 */
+.gauge--thick {
+  height: 8px;
+}
+
 .gauge__fill {
   display: block;
   height: 100%;
@@ -2739,74 +2757,6 @@ a:focus-visible {
   color: var(--warn);
   font-size: 10.5px;
   line-height: 1.45;
-}
-
-/* 读数走势：Tufte sparkline 的形状 + Few bullet graph 的定性区间带。
-   y 轴固定 0~100%，所以「线多高」仍然等于「多满」，与原来的条同一量纲。
-   没有轨道底色、也没有面积填充：实心槽 + 面积在 16px 高下会被读成「进度条」，
-   两样都去掉之后剩下的就是一根折线，它有多高就是有多满。 */
-.spark {
-  display: block;
-  height: 16px;
-  /* 不裁切：末点要能画到右边缘外侧一点，否则圆点被切成半个。
-     背景渐变本身就会被 border-radius 裁在圆角内，不需要 overflow。 */
-  border-radius: 4px;
-  background-repeat: no-repeat;
-  box-shadow: inset 0 -1px 0 var(--border);
-}
-
-.spark__svg {
-  display: block;
-  width: 100%;
-  height: 100%;
-  overflow: visible;
-}
-
-.spark__line {
-  fill: none;
-  stroke: var(--text-3);
-  stroke-width: 1.3;
-  stroke-linejoin: round;
-  stroke-linecap: round;
-}
-
-/* 告警参考线：1px 实线，比「背景色块」少得多的墨。
-   平时是中性灰的尺子，只在真的越过它（tone=crit）时才变红 ——
-   永远红着的一根线会变成狼来了：每张健康卡上也挂着一条红线。 */
-.spark__threshold {
-  fill: none;
-  stroke: var(--text-4);
-  stroke-width: 1;
-  opacity: 0.4;
-}
-
-.spark--crit .spark__threshold {
-  stroke: var(--crit);
-  opacity: 0.7;
-}
-
-/* 末点（「现在」）：0.01 长的一段 + 圆头 + non-scaling-stroke ⇒ 不随横向拉伸变形的圆点。
-   严重度色只出现在这里：历史曲线保持中性，不在告警时突变。 */
-.spark__now {
-  fill: none;
-  stroke-linecap: round;
-  stroke-width: 4;
-}
-
-.spark__now--ok {
-  stroke: var(--ok);
-}
-
-.spark__now--warn {
-  stroke: var(--warn);
-}
-
-.spark__now--crit {
-  stroke: var(--crit);
-}
-
-.spark__now--none {
-  stroke: transparent;
 }
 
 /* ── 中间件层 ────────────────────────────────────────────────────────────

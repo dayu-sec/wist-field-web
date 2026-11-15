@@ -431,16 +431,6 @@ export interface MetricsOverview {
   catalog: MetricsCatalogEntry[]
 }
 
-export interface MetricsHistorySeries {
-  /** 规范指标名（`agent_cpu_ratio` …），只用于排查。 */
-  metric: string
-  /** 页面标题：BFF 按 `wist-metrics` 常量表给出，前端不认名字。 */
-  title: string
-  unit: 'percent' | 'bytes' | 'count' | 'milliseconds'
-  /** `[unix 毫秒, 值]`，按时间升序。 */
-  points: [number, number][]
-}
-
 /**
  * 中间件一族的当前读数（Kafka / MySQL / PG / Doris / 容器）。
  *
@@ -470,16 +460,19 @@ export function getMetricsMiddleware(): Promise<MiddlewareOverview> {
 }
 
 /**
- * 一条数据面通道在窗口内**收到了多少**。
+ * 一条数据面通道**累计**写入了多少、最后一次是什么时候。
  *
- * 三条通道的单元本来就不一样（证据按条、Atlas 按投递批次、指标按样本），
+ * 三条通道的单元本来就不一样（证据按条、Atlas 按快照条数、指标按样本），
  * 所以 `unit` 跟着数据走，页面不做换算。
- * `received === null` 表示这个通道没给计数（原因在 `note` 里）。
+ * `total === null` 表示这个通道没有累计概念（指标只有样本流）或没拿到，原因在 `note` 里。
  */
 export interface IngestChannel {
   id: 'evidence' | 'atlas' | 'metrics'
   label: string
   unit: string
+  /** 累计写入量（服务端进程内计数器，O(1)）。 */
+  total: number | null
+  /** 窗口内的量，只在显式传 `window_seconds > 0` 时给。 */
   received: number | null
   /** 最后一次接收时间（unix 毫秒）。 */
   last_at_ms: number | null
@@ -492,41 +485,11 @@ export interface IngestStats {
   channels: IngestChannel[]
 }
 
-/** `window_seconds` 只影响窗口内那个计数，不影响「最后一次」。 */
-export function getIngestStats(windowSeconds: number): Promise<IngestStats> {
-  return request<IngestStats>(`/api/ingest/stats?window_seconds=${windowSeconds}`)
-}
-
 /**
- * 一屏主机的三条走势（主机卡上的迷你图）。
- *
- * 按 agent 单查 history 的话，13 台就是 13 个请求、每 30 秒一轮；这里一次给全队。
- * 单位：`load_1m` 是原始负载（页面按核数折算），内存 / 磁盘是 0..1 的比例。
+ * 看板实时轮询传 `0` = 只要累计与「最后一次」，服务端不做任何窗口 count。
  */
-export interface MetricsHostTrend {
-  load_1m: [number, number][]
-  memory_usage: [number, number][]
-  disk_usage: [number, number][]
-}
-
-export interface MetricsHostsHistory {
-  window_seconds: number
-  step_seconds: number
-  /** agent_id → 三条走势；没有数据的主机不出现。 */
-  hosts: Record<string, MetricsHostTrend>
-}
-
-export function getMetricsHostsHistory(windowSeconds: number): Promise<MetricsHostsHistory> {
-  const params = new URLSearchParams({ window_seconds: String(windowSeconds) })
-  return request<MetricsHostsHistory>(`/api/metrics/hosts/history?${params.toString()}`)
-}
-
-export interface MetricsAgentHistory {
-  agent_id: string
-  window_seconds: number
-  step_seconds: number
-  labels: Record<string, string>
-  series: MetricsHistorySeries[]
+export function getIngestStats(windowSeconds = 0): Promise<IngestStats> {
+  return request<IngestStats>(`/api/ingest/stats?window_seconds=${windowSeconds}`)
 }
 
 /**
@@ -610,16 +573,6 @@ export function getEvidenceOpenApi(): Promise<OpenApiDocument> {
 
 export function getMetrics(): Promise<MetricsOverview> {
   return request<MetricsOverview>('/api/metrics')
-}
-
-export function getMetricsHistory(
-  agentId: string,
-  windowSeconds: number,
-): Promise<MetricsAgentHistory> {
-  const params = new URLSearchParams({ window_seconds: String(windowSeconds) })
-  return request<MetricsAgentHistory>(
-    `/api/metrics/agents/${encodeURIComponent(agentId)}/history?${params.toString()}`,
-  )
 }
 
 // ---------------------------------------------------------------------------

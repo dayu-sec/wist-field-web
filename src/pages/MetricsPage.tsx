@@ -2,13 +2,10 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   ApiError,
   getMetrics,
-  getMetricsHostsHistory,
   getMetricsMiddleware,
   type MetricsAgent,
   type MetricsBusiness,
   type MetricsCatalogEntry,
-  type MetricsHostsHistory,
-  type MetricsHostTrend,
   type MetricsOverview,
   type MiddlewareFamily,
   type MiddlewareSample,
@@ -24,13 +21,6 @@ import {
   PageShell,
   type BadgeTone,
 } from '../components/ui'
-
-/** 趋势窗口：只给三档 —— 页面是「现在有没有在跳」，不是长期容量分析。 */
-const WINDOWS = [
-  { seconds: 900, label: '15 分钟' },
-  { seconds: 3_600, label: '1 小时' },
-  { seconds: 21_600, label: '6 小时' },
-]
 
 const REFRESH_MS = 30_000
 
@@ -157,66 +147,6 @@ function percentTone(percent: number | null): GaugeTone {
   return 'ok'
 }
 
-/** 告警参考线的位置与 `percentTone` 共用同一个数字：85% 以上算严重。 */
-const CRIT_THRESHOLD = 85
-
-/**
- * 一条读数的走势（代替纯色条）。
- *
- * 形状比分位更早告警：从 40% 爬到 80% 和一直 80% 是两回事。
- * y 轴固定 0~100%，所以「线多高」仍然能当「多满」读，和原来的条是一个量纲。
- * （**不**按数据自适应：自适应会让 88% 的平线和 9% 的平线长得一模一样，主机墙就失去了横比。）
- *
- * 三件套各管一件事（Tufte sparkline + Few bullet graph 的阈值标线）：
- * - 告警参考线 = 阈值，位置与 `percentTone` 同源，「线过没过红线」直接读；
- * - 线 = 形状，它的**高度**就是「多满」（不再画面积：16px 高的框里 87% 的填充就是一块灰砖）；
- * - 末点 = 「现在」，圆点颜色跟着当前严重度走。
- *
- * 为什么不用「定性区间带」（bullet graph 的常用写法）：它把阈值画成**背景色块**，
- * 13 张卡每张都重复同一块色块，就变成了与数据无关的装饰；一根标线只占 1px。
- */
-function Spark({
-  points,
-  tone,
-  threshold,
-}: {
-  points: [number, number][]
-  tone: GaugeTone
-  /** 告警阈值（0~100），画一根横向参考线。不传就不画。 */
-  threshold?: number
-}) {
-  if (points.length < 2) return null
-  const width = 100
-  const height = 16
-  const values = points.map((point) => Math.max(0, Math.min(100, point[1])))
-  const step = width / (values.length - 1)
-  const yOf = (value: number) => (height - (value / 100) * height).toFixed(2)
-  const line = values
-    .map((value, index) => `${index === 0 ? 'M' : 'L'}${(index * step).toFixed(2)},${yOf(value)}`)
-    .join(' ')
-  const now = yOf(values[values.length - 1])
-  return (
-    <span className={`spark spark--${tone}`}>
-      <svg className="spark__svg" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" aria-hidden="true">
-        {threshold === undefined ? null : (
-          <path
-            className="spark__threshold"
-            d={`M0,${yOf(threshold)} L${width},${yOf(threshold)}`}
-            vectorEffect="non-scaling-stroke"
-          />
-        )}
-        <path className="spark__line" d={line} vectorEffect="non-scaling-stroke" />
-        {/* 末点：0.01 长的一段 + 圆头 + non-scaling-stroke，得到不随横向拉伸变形的圆点。 */}
-        <path
-          className={`spark__now spark__now--${tone}`}
-          d={`M${width},${now} L${width - 0.01},${now}`}
-          vectorEffect="non-scaling-stroke"
-        />
-      </svg>
-    </span>
-  )
-}
-
 /** 卡片里只留整数百分比：272px 宽的卡放不下 `92.00% / 16.00 GB`。 */
 function formatPercentCompact(value: number | null): string {
   return value === null || !Number.isFinite(value) ? '—' : `${Math.round(value)}%`
@@ -295,19 +225,19 @@ function sortBySeverity(agents: MetricsAgent[]): MetricsAgent[] {
 }
 
 /**
- * 一台主机卡：身份（主机名 + IP）+ 三条读数 + 走势。
+ * 一台主机卡：身份（主机名 + IP）+ 三条读数。
+ *
+ * 读数用**实心条**（与中间件卡的 gauge 同一个组件、同一套规格）：条的长度是「多满」，
+ * 颜色是严重度，右边对齐的读数是精确值。
  *
  * 卡本身不是按钮：它的职责是「一眼看清」，不承担导航。从服务页 / 上方读数卡点过来时，
  * 用 `--selected` 高亮加 `scrollIntoView` 把那张卡带到视野里。
  */
 function HostCard({
   agent,
-  series,
   selected,
 }: {
   agent: MetricsAgent
-  /** 这台机的三条走势；取不到时回退成瞬时条。 */
-  series?: MetricsHostTrend
   selected: boolean
 }) {
   const host = agent.host
@@ -323,18 +253,10 @@ function HostCard({
   const diskHint =
     filesystem !== null && filesystem >= (disk ?? -1) ? mountName(host.filesystem_mount) : '系统盘'
   const hasFacts = host.hostname !== null || host.load_1m !== null || memory !== null
-  // 趋势按条上同一个量纲折算：负载 / 核数 → 利用率，内存 / 磁盘 ×100。
-  const cores = agent.cpu_cores && agent.cpu_cores > 0 ? agent.cpu_cores : null
-  const loadTrend: [number, number][] =
-    series?.load_1m.map(([at, value]) => [at, cores ? (value / cores) * 100 : value]) ?? []
-  const memoryTrend: [number, number][] =
-    series?.memory_usage.map(([at, value]) => [at, value * 100]) ?? []
-  const diskTrend: [number, number][] =
-    series?.disk_usage.map(([at, value]) => [at, value * 100]) ?? []
   // 主标题给人认的名字（主机名 / IP），agent id 退到右边当关联键（见 `hostIdentity`）。
   const identity = hostIdentity(agent)
   const addr = identity.sub ?? ''
-  // 三条读数各自的严重度：图上的末点和右边的读数是同一个颜色，一个语义只给一处颜色。
+  // 三条读数各自的严重度：条、读数和标签是同一个颜色，一个语义只给一处颜色。
   const loadLevel = loadTone(ratio)
   const memoryLevel = percentTone(memory)
   const diskLevel = percentTone(diskPercent)
@@ -361,11 +283,7 @@ function HostCard({
         <span className="host-card__rows">
           <span className="host-row">
             <span className="host-row__label">负载 1m</span>
-            {loadTrend.length >= 2 ? (
-              <Spark points={loadTrend} tone={loadLevel} />
-            ) : (
-              <Gauge percent={ratio === null ? null : ratio * 100} tone={loadLevel} />
-            )}
+            <Gauge percent={ratio === null ? null : ratio * 100} tone={loadLevel} />
             <span className={`host-row__num host-row__num--${loadLevel}`}>
               {host.load_1m === null ? '—' : host.load_1m.toFixed(2)}
             </span>
@@ -375,11 +293,7 @@ function HostCard({
           </span>
           <span className="host-row">
             <span className="host-row__label">内存</span>
-            {memoryTrend.length >= 2 ? (
-              <Spark points={memoryTrend} tone={memoryLevel} threshold={CRIT_THRESHOLD} />
-            ) : (
-              <Gauge percent={memory} tone={memoryLevel} />
-            )}
+            <Gauge percent={memory} tone={memoryLevel} />
             <span className={`host-row__num host-row__num--${memoryLevel}`}>{formatPercentCompact(memory)}</span>
             <span className="host-row__hint">
               {host.memory_total_bytes === null ? '' : `/ ${formatBytes(host.memory_total_bytes)}`}
@@ -387,11 +301,7 @@ function HostCard({
           </span>
           <span className="host-row">
             <span className="host-row__label">磁盘</span>
-            {diskTrend.length >= 2 ? (
-              <Spark points={diskTrend} tone={diskLevel} threshold={CRIT_THRESHOLD} />
-            ) : (
-              <Gauge percent={diskPercent} tone={diskLevel} />
-            )}
+            <Gauge percent={diskPercent} tone={diskLevel} />
             <span className={`host-row__num host-row__num--${diskLevel}`}>{formatPercentCompact(diskPercent)}</span>
             <span className="host-row__hint">{diskPercent === null ? '' : `/ ${diskHint}`}</span>
           </span>
@@ -861,10 +771,8 @@ export function MetricsPage() {
   const [overview, setOverview] = useState<MetricsOverview | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
-  const [windowSeconds, setWindowSeconds] = useState(3_600)
   const [selected, setSelected] = useState<string | null>(null)
   const [tab, setTab] = useState<LayerId>('hosts')
-  const [hostSeries, setHostSeries] = useState<MetricsHostsHistory | null>(null)
   // `undefined` = 首轮还没回来，`null` = 接口失败：两者都不能当成「没采集」。
   const [middleware, setMiddleware] = useState<MiddlewareFamily[] | null | undefined>(undefined)
 
@@ -896,23 +804,6 @@ export function MetricsPage() {
     selected && agents.some((agent) => agent.agent_id === selected)
       ? selected
       : (agents[0]?.agent_id ?? null)
-
-  // 主机卡上的走势：一次拿全队（不是每台一条请求），失败就当没有历史，回退成瞬时条。
-  const loadHostSeries = useCallback(async () => {
-    try {
-      setHostSeries(await getMetricsHostsHistory(windowSeconds))
-    } catch {
-      setHostSeries(null)
-    }
-  }, [windowSeconds])
-
-  // 走势只在「主机」页上：别的页没必要每 30 秒拉一次曲线。
-  useEffect(() => {
-    if (tab !== 'hosts') return
-    void loadHostSeries()
-    const timer = window.setInterval(() => void loadHostSeries(), REFRESH_MS)
-    return () => window.clearInterval(timer)
-  }, [loadHostSeries, tab])
 
   // 中间件三层的读数都不大（一次几行），跟概览一起轮询：tab 副标题要随时能说“2 broker”。
   const loadMiddleware = useCallback(async () => {
@@ -984,31 +875,14 @@ export function MetricsPage() {
       title="运行指标"
       summary="三层看这一片：主机 → 服务 → 中间件。先回答「哪台 / 哪套不对」，指标的原始清单放在最后一节。读数来自计算区自己的 VictoriaMetrics（CONSOLE_VM_ENDPOINT），30 秒刷新一次。"
       actions={
-        <>
-          <select
-            aria-label="走势窗口"
-            title="只影响主机卡上的走势，不改读数本身"
-            value={windowSeconds}
-            onChange={(event) => setWindowSeconds(Number(event.target.value))}
-          >
-            {WINDOWS.map((option) => (
-              <option key={option.seconds} value={option.seconds}>
-                近 {option.label}
-              </option>
-            ))}
-          </select>
-          <button
-            type="button"
-            className="button button--ghost"
-            onClick={() => {
-              void load()
-              void loadHostSeries()
-            }}
-            disabled={loading}
-          >
-            {loading ? '加载中…' : '刷新'}
-          </button>
-        </>
+        <button
+          type="button"
+          className="button button--ghost"
+          onClick={() => void load()}
+          disabled={loading}
+        >
+          {loading ? '加载中…' : '刷新'}
+        </button>
       }
     >
       <Block wide>
@@ -1088,7 +962,7 @@ export function MetricsPage() {
               id="layer-panel-hosts"
               role="tabpanel"
               labelledBy="layer-tab-hosts"
-              subtitle="卡里是主机的读数（宿主侧 system_* / process_*）：负载按核数折算（1.0 = 跑满）、内存、最紧的磁盘，每条都带近一段时间的走势；采集停了会多一行提示（读数是最后一次上报的值）。卡片顺序 = 严重程度，压力大的与采集断的永远排在前面。"
+              subtitle="卡里是主机的读数（宿主侧 system_* / process_*）：负载按核数折算（1.0 = 跑满）、内存、最紧的磁盘，每条一条实心条 + 对齐的读数；采集停了会多一行提示（读数是最后一次上报的值）。卡片顺序 = 严重程度，压力大的与采集断的永远排在前面。"
             >
               <FleetSummary
                 agents={agents}
@@ -1102,7 +976,6 @@ export function MetricsPage() {
                   <HostCard
                     key={agent.agent_id}
                     agent={agent}
-                    series={hostSeries?.hosts[agent.agent_id]}
                     selected={agent.agent_id === activeAgentId}
                   />
                 ))}
