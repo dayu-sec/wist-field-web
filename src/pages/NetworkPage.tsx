@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   ApiError,
+  getAtlasHosts,
   getElasticIps,
   getNetworkDomains,
+  type AtlasHostItem,
   type ElasticIpItem,
   type NetworkDomainItem,
   type NetworkSegmentItem,
 } from '../api'
+import { formatRelativeTime } from '../format'
 import {
   Badge,
   Block,
@@ -122,6 +125,56 @@ function compareDomains(a: NetworkDomainItem, b: NetworkDomainItem): number {
   return a.name.localeCompare(b.name)
 }
 
+/**
+ * 云采集 vs 端侧发现。
+ *
+ * 只认 `cloudAccount` / `externalRef`：云账号采集的行一定有云侧 id（VpcId/SubnetId），
+ * 端侧发现的行两者都为空。`cloudInstanceId` 端侧也会带，**不能**当判据。
+ */
+function provenanceOf(item: {
+  cloudAccount: string | null
+  externalRef: string | null
+}): 'cloud' | 'edge' {
+  return item.cloudAccount || item.externalRef ? 'cloud' : 'edge'
+}
+
+/** 一组 ISO 时间里的最大值；全空返回 null（不拿当前时间硬编）。 */
+function latestAt(values: (string | null | undefined)[]): string | null {
+  let latest: string | null = null
+  let latestMs = -Infinity
+  for (const value of values) {
+    if (!value) continue
+    const ms = new Date(value).getTime()
+    if (!Number.isFinite(ms) || ms <= latestMs) continue
+    latestMs = ms
+    latest = value
+  }
+  return latest
+}
+
+type SegmentEntry = { segment: NetworkSegmentItem; domainName: string }
+
+/** 子网排序：空的在前（占着 CIDR 没人用才是要处理的），同一档里用得多的在前。 */
+function sortSegments(entries: SegmentEntry[]): SegmentEntry[] {
+  return [...entries].sort((a, b) => {
+    const byEmpty = Number(b.segment.hostCount === 0) - Number(a.segment.hostCount === 0)
+    if (byEmpty !== 0) return byEmpty
+    const byHosts = b.segment.hostCount - a.segment.hostCount
+    if (byHosts !== 0) return byHosts
+    return (a.segment.cidr ?? '').localeCompare(b.segment.cidr ?? '')
+  })
+}
+
+/** 一行数据的来源徽标。 */
+function ProvenanceBadge({
+  item,
+}: {
+  item: { cloudAccount: string | null; externalRef: string | null }
+}) {
+  const cloud = provenanceOf(item) === 'cloud'
+  return <Badge tone={cloud ? 'green' : 'gray'}>{cloud ? '云采集' : '端侧发现'}</Badge>
+}
+
 type NetworkSection = 'vpc' | 'subnets' | 'ips' | 'idle'
 
 const SECTIONS: { id: NetworkSection; label: string }[] = [
@@ -161,22 +214,26 @@ export function NetworkPage({
 }) {
   const [domains, setDomains] = useState<NetworkDomainItem[] | null>(null)
   const [ips, setIps] = useState<ElasticIpItem[] | null>(null)
+  const [hosts, setHosts] = useState<AtlasHostItem[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      // 两个接口互不依赖：一个失败不该把另一个也清空。
-      const [domainResult, ipResult] = await Promise.allSettled([
+      // 三个接口互不依赖：一个失败不该把另外两个也清空。
+      const [domainResult, ipResult, hostResult] = await Promise.allSettled([
         getNetworkDomains(),
         getElasticIps(),
+        getAtlasHosts(),
       ])
       const failures: string[] = []
       if (domainResult.status === 'fulfilled') setDomains(domainResult.value)
       else failures.push(`网络：${errorText(domainResult.reason)}`)
       if (ipResult.status === 'fulfilled') setIps(ipResult.value)
       else failures.push(`公网 IP：${errorText(ipResult.reason)}`)
+      if (hostResult.status === 'fulfilled') setHosts(hostResult.value)
+      else failures.push(`主机：${errorText(hostResult.reason)}`)
       setError(failures.length > 0 ? failures.join('；') : null)
     } finally {
       setLoading(false)
@@ -191,38 +248,62 @@ export function NetworkPage({
 
   const model = useMemo(() => {
     const sorted = [...(domains ?? [])].sort(compareDomains)
-    const used = sorted.filter(isUsedDomain)
-    const unused = sorted.filter((domain) => !isUsedDomain(domain))
-    const segments = sorted.flatMap((domain) =>
+    // 云侧 VPC 与兜底域分开：没有云数据时 atlas 会造一个 name=default 的兜底域，
+    // 把所有端侧发现的地址段挂在下面 —— 它不是 VPC，不能计入 VPC 的统计。
+    const cloudDomains = sorted.filter((domain) => provenanceOf(domain) === 'cloud')
+    const edgeDomains = sorted.filter((domain) => provenanceOf(domain) === 'edge')
+    const cloudUsed = cloudDomains.filter(isUsedDomain)
+    const cloudUnused = cloudDomains.filter((domain) => !isUsedDomain(domain))
+
+    const allSegments: SegmentEntry[] = sorted.flatMap((domain) =>
       domain.segments.map((segment) => ({ segment, domainName: domain.name })),
     )
-    // 子网 tab 的排序：空的在前（占着 CIDR 没人用才是要处理的），同一档里用得多的在前。
-    const sortedSegments = [...segments].sort((a, b) => {
-      const byEmpty =
-        Number(b.segment.hostCount === 0) - Number(a.segment.hostCount === 0)
-      if (byEmpty !== 0) return byEmpty
-      const byHosts = b.segment.hostCount - a.segment.hostCount
-      if (byHosts !== 0) return byHosts
-      return (a.segment.cidr ?? '').localeCompare(b.segment.cidr ?? '')
-    })
-    const accounts = [...new Set(sorted.map((domain) => domain.cloudAccount).filter(Boolean))]
+    const cloudSegments = allSegments.filter(
+      ({ segment }) => provenanceOf(segment) === 'cloud',
+    )
+    const observedSegments = allSegments.filter(
+      ({ segment }) => provenanceOf(segment) === 'edge',
+    )
+
+    const accounts = [
+      ...new Set(cloudDomains.map((domain) => domain.cloudAccount).filter(Boolean)),
+    ]
+
+    const cloudHosts = (hosts ?? []).filter((host) => Boolean(host.cloudAccount))
+    const edgeHosts = (hosts ?? []).filter((host) => !host.cloudAccount)
+
     const bindingKinds = new Map<string, number>()
     for (const ip of ips ?? []) {
       const key = ip.boundTargetKind ?? 'none'
       bindingKinds.set(key, (bindingKinds.get(key) ?? 0) + 1)
     }
+
     return {
-      used,
-      unused,
-      segments: sortedSegments,
-      segmentCount: segments.length,
-      emptySegments: segments.filter(({ segment }) => segment.hostCount === 0).length,
+      cloudDomains,
+      edgeDomains,
+      cloudUsed,
+      cloudUnused,
+      cloudSegments: sortSegments(cloudSegments),
+      observedSegments: sortSegments(observedSegments),
       accounts,
+      cloudHosts,
+      edgeHosts,
+      // 云侧没有主机 / EIP 时就没有「最后一次观测」可说 —— 不拿当前时间硬编。
+      lastCloudAt: latestAt([
+        ...cloudHosts.map((host) => host.lastInventoryAt),
+        ...(ips ?? []).map((ip) => ip.lastInventoryAt),
+      ]),
+      lastEdgeAt: latestAt(edgeHosts.map((host) => host.lastInventoryAt)),
       bindingKinds,
       idleCount: (ips ?? []).filter(isIdle).length,
-      hostTotal: sorted.reduce((sum, domain) => sum + domainHosts(domain), 0),
+      cloudHostTotal: cloudSegments.reduce((sum, { segment }) => sum + segment.hostCount, 0),
+      cloudEmpty:
+        cloudDomains.length === 0 &&
+        cloudSegments.length === 0 &&
+        cloudHosts.length === 0 &&
+        (ips ?? []).length === 0,
     }
-  }, [domains, ips])
+  }, [domains, ips, hosts])
 
   const boundByHost = model.bindingKinds.get('host') ?? 0
   const boundByNat = model.bindingKinds.get('nat_gateway') ?? 0
@@ -233,10 +314,10 @@ export function NetworkPage({
   // tab 的副标题兼一眼摘要：原来四张统计卡上的数字挪到这里，跟着 tab 一起出现。
   const hints: Record<NetworkSection, string> = {
     vpc: domains
-      ? `${domains.length} 个 · ${model.used.length} 个有主机 / ${model.unused.length} 个空壳`
+      ? `${model.cloudDomains.length} 个云 VPC · ${model.cloudUsed.length} 有主机 / ${model.cloudUnused.length} 空壳${model.edgeDomains.length > 0 ? ` · 兜底域 ${model.edgeDomains.length}` : ''}`
       : '按主机数排序 · 空 VPC 折叠',
     subnets: domains
-      ? `${model.segmentCount} 个 · ${model.emptySegments} 个空子网 · ${model.hostTotal} 台机`
+      ? `云子网 ${model.cloudSegments.length}（${model.cloudSegments.filter(({ segment }) => segment.hostCount === 0).length} 空） · ${model.cloudHostTotal} 台机 · 观测网段 ${model.observedSegments.length}`
       : '空子网占着 CIDR 却没人用',
     ips: ips
       ? `${ips.length} 个 · ${boundByHost} 台主机入口 / ${boundByNat} 个 NAT`
@@ -253,12 +334,19 @@ export function NetworkPage({
       <span className="muted">账号 {model.accounts.map(accountShort).join(' / ')}</span>
     ) : undefined
 
+  // 「云端到底有没有数据、harvest 还在不在跑」：用云账号的行（主机 / EIP）的最近观测时间回答。
+  // 没有云主机也没有云 EIP 时，明确写「未入库」，而不是显示一个看起来正常的「—」。
+  const cloudSource = model.cloudEmpty
+    ? '暂无云资产（wist-harvest 未写入 atlas）'
+    : `${model.cloudDomains.length} VPC · ${model.cloudSegments.length} 子网 · ${model.cloudHosts.length} 云主机 · 最近 ${formatRelativeTime(model.lastCloudAt)}`
+  const edgeSource = `${model.edgeHosts.length} 台 · 最近 ${formatRelativeTime(model.lastEdgeAt)}`
+
   return (
     <PageShell
       title="网络资产"
       summary={
         <>
-          VPC / 子网与弹性公网 IP，来自云账号采集（wist-atlas）。{' '}
+          VPC / 子网与弹性公网 IP：云账号资产由 wist-harvest 采集，端侧观测到的地址段单独列出、不计入子网。{' '}
           <span className="muted">
             空子网是占着不用的 CIDR，闲置公网 IP 照样按小时计费 —— 这两类各自一个 tab。
           </span>
@@ -279,6 +367,14 @@ export function NetworkPage({
 
       <Block wide>
         <div className="stack">
+          <div className="statusline">
+            <span className="statusline__label">数据来源</span>
+            <Badge tone={model.cloudEmpty ? 'gray' : 'green'}>云采集</Badge>
+            <span className="statusline__note">{cloudSource}</span>
+            <Badge tone="gray">端侧发现</Badge>
+            <span className="statusline__note">{edgeSource}</span>
+          </div>
+
           <div className="tabs" role="tablist" aria-label="网络资产视图">
             {SECTIONS.map((item) => (
               <button
@@ -304,56 +400,88 @@ export function NetworkPage({
               <Card
                 title="VPC"
                 subtitle={
-                  domains && domains.length > 0
-                    ? `按主机数排序${model.unused.length > 0 ? `；${model.unused.length} 个空 VPC（云上自带的 Default-VPC）折叠在最后` : ''}。区域暂未采集 —— 同名 VPC 只能靠 CIDR 区分。`
-                    : '地址规划的顶格：每个 VPC 一段 CIDR'
+                  model.cloudDomains.length > 0
+                    ? `按主机数排序；空 VPC 折叠在最后。端侧发现的兜底域不计入 VPC 统计，单独列在下面。`
+                    : '地址规划的顶格：每个 VPC 一段 CIDR。没有云侧 VPC 时，端侧发现的网段会挂在兜底域下。'
                 }
                 aside={accounts}
               >
                 {domains === null ? (
                   <p className="muted">{loading ? '正在读取…' : '尚未读取'}</p>
-                ) : domains.length === 0 ? (
-                  <Empty
-                    title="还没有采集到 VPC"
-                    hint="云账号资产由 wist-harvest 采集后写入 atlas；确认采集任务在跑。"
-                  />
                 ) : (
                   <>
-                    <div className="table-wrap">
-                      <table className="table">
-                        <thead>
-                          <tr>
-                            <th>VPC</th>
-                            <th>CIDR</th>
-                            <th>地址数</th>
-                            <th>子网</th>
-                            <th>主机</th>
-                            <th>云侧 id</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {model.used.map((domain) => (
-                            <DomainRow key={domain.id} domain={domain} />
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-
-                    {model.unused.length > 0 ? (
-                      <details className="details" style={{ marginTop: 12 }}>
-                        <summary className="details__summary">
-                          还有 {model.unused.length} 个空 VPC（
-                          {model.unused.reduce((sum, domain) => sum + domain.segments.length, 0)}{' '}
-                          个子网，全部没有主机）
-                        </summary>
-                        <div className="details__body">
+                    {model.cloudDomains.length === 0 ? (
+                      <Empty
+                        title="还没有采集到云侧 VPC"
+                        hint="云账号资产由 wist-harvest 采集后写入 atlas。下面「端侧发现」是主机网卡上看到的地址段，不是云侧 VPC。"
+                      />
+                    ) : (
+                      <>
+                        <div className="table-wrap">
                           <table className="table">
+                            <thead>
+                              <tr>
+                                <th>VPC</th>
+                                <th>来源</th>
+                                <th>CIDR</th>
+                                <th>地址数</th>
+                                <th>子网</th>
+                                <th>主机</th>
+                                <th>云侧 id</th>
+                              </tr>
+                            </thead>
                             <tbody>
-                              {model.unused.map((domain) => (
+                              {model.cloudUsed.map((domain) => (
                                 <DomainRow key={domain.id} domain={domain} />
                               ))}
                             </tbody>
                           </table>
+                        </div>
+
+                        {model.cloudUnused.length > 0 ? (
+                          <details className="details" style={{ marginTop: 12 }}>
+                            <summary className="details__summary">
+                              还有 {model.cloudUnused.length} 个空 VPC（
+                              {model.cloudUnused.reduce(
+                                (sum, domain) => sum + domain.segments.length,
+                                0,
+                              )}{' '}
+                              个子网，全部没有主机）
+                            </summary>
+                            <div className="details__body">
+                              <table className="table">
+                                <tbody>
+                                  {model.cloudUnused.map((domain) => (
+                                    <DomainRow key={domain.id} domain={domain} />
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </details>
+                        ) : null}
+                      </>
+                    )}
+
+                    {model.edgeDomains.length > 0 ? (
+                      <details className="details" style={{ marginTop: 12 }}>
+                        <summary className="details__summary">
+                          端侧发现：{model.edgeDomains.length} 个兜底域 /{' '}
+                          {model.observedSegments.length} 个观测网段（不是云侧 VPC）
+                        </summary>
+                        <div className="details__body">
+                          <p className="muted">
+                            这些段来自 agentd 在主机网卡上看到的地址。没有云侧 VPC 时 atlas 会把它们挂在一个名为{' '}
+                            <Mono>default</Mono> 的兜底域下 —— 它不是 VPC，也不计入上面的统计。
+                          </p>
+                          <div className="table-wrap">
+                            <table className="table">
+                              <tbody>
+                                {model.edgeDomains.map((domain) => (
+                                  <DomainRow key={domain.id} domain={domain} />
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
                         </div>
                       </details>
                     ) : null}
@@ -365,42 +493,87 @@ export function NetworkPage({
             {active === 'subnets' ? (
               <Card
                 title="子网"
-                subtitle="空子网排最前：占着一段 CIDR 却没有主机。容量按 CIDR 里的地址总数算，不扣网络地址和广播地址。"
+                subtitle="云侧子网：空子网排最前（占着 CIDR 却没主机）。端侧观测到的地址段不是云侧子网，单列在最后。"
                 aside={accounts}
               >
                 {domains === null ? (
                   <p className="muted">{loading ? '正在读取…' : '尚未读取'}</p>
-                ) : model.segments.length === 0 ? (
-                  <Empty
-                    title="还没有采集到子网"
-                    hint="确认云账号采集覆盖了 VPC / 子网类型。"
-                  />
                 ) : (
-                  <div className="table-wrap">
-                    <table className="table">
-                      <thead>
-                        <tr>
-                          <th>子网</th>
-                          <th>所属 VPC</th>
-                          <th>CIDR</th>
-                          <th>地址数</th>
-                          <th>主机 / 容量</th>
-                          <th>云侧 id</th>
-                          <th />
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {model.segments.map(({ segment, domainName }) => (
-                          <SegmentRow
-                            key={segment.id}
-                            segment={segment}
-                            domainName={domainName}
-                            onOpenTopology={onOpenTopology}
-                          />
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                  <>
+                    {model.cloudSegments.length === 0 ? (
+                      <Empty
+                        title="还没有采集到云侧子网"
+                        hint="确认云账号采集覆盖了 VPC / 子网类型。端侧观测到的地址段在下面单独列出，不计入子网统计。"
+                      />
+                    ) : (
+                      <div className="table-wrap">
+                        <table className="table">
+                          <thead>
+                            <tr>
+                              <th>子网</th>
+                              <th>来源</th>
+                              <th>所属 VPC</th>
+                              <th>CIDR</th>
+                              <th>地址数</th>
+                              <th>主机 / 容量</th>
+                              <th>云侧 id</th>
+                              <th />
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {model.cloudSegments.map(({ segment, domainName }) => (
+                              <SegmentRow
+                                key={segment.id}
+                                segment={segment}
+                                domainName={domainName}
+                                onOpenTopology={onOpenTopology}
+                              />
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+
+                    {model.observedSegments.length > 0 ? (
+                      <details className="details" style={{ marginTop: 12 }}>
+                        <summary className="details__summary">
+                          端侧观测网段：{model.observedSegments.length} 个（不是云侧子网）
+                        </summary>
+                        <div className="details__body">
+                          <p className="muted">
+                            agentd 在主机网卡上看到的地址/前缀。单 IP 的 /32、docker 网桥都会出现在这里，
+                            所以它们不计入上面的「子网」统计。
+                          </p>
+                          <div className="table-wrap">
+                            <table className="table">
+                              <thead>
+                                <tr>
+                                  <th>网段</th>
+                                  <th>来源</th>
+                                  <th>所属兜底域</th>
+                                  <th>CIDR</th>
+                                  <th>地址数</th>
+                                  <th>主机 / 容量</th>
+                                  <th>云侧 id</th>
+                                  <th />
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {model.observedSegments.map(({ segment, domainName }) => (
+                                  <SegmentRow
+                                    key={segment.id}
+                                    segment={segment}
+                                    domainName={domainName}
+                                    onOpenTopology={onOpenTopology}
+                                  />
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      </details>
+                    ) : null}
+                  </>
                 )}
               </Card>
             ) : null}
@@ -450,6 +623,9 @@ function DomainRow({ domain }: { domain: NetworkDomainItem }) {
         <strong>{domain.name}</strong>
       </td>
       <td>
+        <ProvenanceBadge item={domain} />
+      </td>
+      <td>
         <Mono>{domain.cidr ?? '—'}</Mono>
       </td>
       <td>{formatAddresses(cidrAddresses(domain.cidr))}</td>
@@ -484,6 +660,9 @@ function SegmentRow({
     <tr>
       <td>
         <strong>{segment.name}</strong>
+      </td>
+      <td>
+        <ProvenanceBadge item={segment} />
       </td>
       <td className="muted">{domainName}</td>
       <td>

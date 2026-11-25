@@ -656,3 +656,28 @@ export async function getElasticIps(): Promise<ElasticIpItem[]> {
   )
   return unwrapAtlas(body).elasticIps
 }
+
+/**
+ * 资产拓扑里的一台主机（只取「怎么区分云资产」和「最近一次观测」要用的字段）。
+ *
+ * `cloudAccount` 才是云账号采集的标记；`cloudInstanceId` 端侧也会带，不能当判据。
+ */
+export interface AtlasHostItem {
+  id: string
+  hostName: string
+  machineId: string | null
+  cloudInstanceId: string | null
+  cloudAccount: string | null
+  observationState: string
+  /** 最近一次（云侧或端侧的）库存观测时间；没有就是 null。 */
+  lastInventoryAt: string | null
+  stale: boolean
+}
+
+/** 主机列表：网络资产页用它算「云侧最近观测 / 端侧最近上报」。 */
+export async function getAtlasHosts(): Promise<AtlasHostItem[]> {
+  const body = await request<AtlasEnvelope<{ hosts: AtlasHostItem[] }>>(
+    '/api/atlas/hosts?limit=500',
+  )
+  return unwrapAtlas(body).hosts
+}
